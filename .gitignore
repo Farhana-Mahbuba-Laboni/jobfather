@@ -1,0 +1,17 @@
+.DS_Store
+*.swp
+*~
+node_modules/
+.venv/
+venv/
+__pycache__/
+
+# Tool state that should never ship to students
+.impeccable/
+.playwright-mcp/
+
+# Course skills are project content. The global ignore excludes .claude/, so
+# both levels must be re-included or Git silently omits every slash command.
+!.claude/
+!.claude/**
+.env
