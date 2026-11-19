@@ -55,6 +55,25 @@ flowchart TD
 
 ---
 
+## 🛡️ Production Engineering & Reliability Highlights
+
+* **Chronological ISO Deduplication:** Upgraded `seen_jobs.json` to an ordered `{url: timestamp}` ledger. Retains the newest 1,000 jobs sorted by discovery date so older jobs prune deterministically.
+* **Prompt Injection Defense:** All scraped text is quarantined within `<untrusted_scraped_circulars>` XML boundaries with explicit system directives preventing prompt hijacking.
+* **Pipeline Telemetry:** Live per-scraper health checks and discovery statistics automatically rendered to GitHub Actions Step Summary (`$GITHUB_STEP_SUMMARY`).
+* **Pinned Dependencies:** Strict version locking in `requirements.txt` for deterministic, zero-surprise cloud runner builds.
+* **Telegram Auto-Chunking:** Automatically chunks messages exceeding 3,900 characters to prevent silent truncation under Telegram's 4,096-char ceiling.
+* **AI Model Fallback Chain:** Automatically cycles through `gemini-3.5-flash-lite`, `gemini-3.8-flash`, and `gemini-3.1-flash-lite` with exponential retry backoff if Google API experiences high traffic.
+
+---
+
+## 🔮 Engineering Roadmap (Future Iterations)
+
+- [ ] Add `pytest` test suite with mocked network fixtures for scraper HTML parsers
+- [ ] SQLite persistence layer for multi-profile candidate indexing
+- [ ] Webhook-based interactive Telegram buttons (e.g. `[Save Job]`, `[Apply Now]`)
+
+---
+
 ## 🎯 What JobFather Filters For
 
 ### 13 Target UX Disciplines:
