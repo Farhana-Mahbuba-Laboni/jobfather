@@ -120,7 +120,7 @@ Open `jobfinder/jobfather.py` and modify the prompt inside `filter_with_ai_and_n
 
 **Farhana Mahbuba Laboni**  
 *UX Designer with a B.Sc in Computer Science & Engineering*  
-[LinkedIn Profile](https://www.linkedin.com/in/farhanamahbuba)
+[LinkedIn Profile](https://www.linkedin.com/in/farhanamlaboni/)
 
 ---
 
