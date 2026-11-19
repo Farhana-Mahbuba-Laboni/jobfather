@@ -1,114 +1,128 @@
-# JobFather (JobFinder) — AI UX Job Bot
+# 🤖 JobFather — Autonomous AI Job Search Engine for UX Designers
 
-> Autonomous daily AI agent that scrapes, filters, and delivers targeted UX & Product Design opportunities directly to Telegram, tailored for a B.Sc in CSE graduate targeting 0–1 year experience roles in Bangladesh and Worldwide Remote.
+> An open-source, serverless AI agent that automatically scrapes, filters, and curates junior UX & Product Design opportunities across 8 platforms every morning, delivering a quiet daily digest directly to Telegram.
+
+[![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-Cloud_Automation-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
+[![Gemini AI](https://img.shields.io/badge/Google_Gemini-Semantic_Filtering-8E75C2?logo=google&logoColor=white)](https://ai.google.dev/)
+[![Telegram Bot](https://img.shields.io/badge/Telegram_Bot-Instant_Alerts-26A5E4?logo=telegram&logoColor=white)](https://telegram.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
 
-## 1. Candidate Profile & Strategic Advantages
+## 💡 Why JobFather?
 
-- **Academic Background**: B.Sc in Computer Science & Engineering (CSE).
-- **Target Experience Level**: Entry-level, Junior, Internships, Trainee, or 0–1 year experience (no experience required; 0–2 years considered if negotiable).
-- **Competitive Advantage**: The CSE degree unlocks technical UX niches (Design Engineer, UX Engineer, Design System Specialist) and satisfies the mandatory "B.Sc in CSE/CS" hiring requirement at major software exporters (Therap, Brain Station 23, BJIT, Cefalo, Selise, etc.).
+Job searching as an entry-level designer is exhausting. Opening 100 tabs every morning, sifting through search results full of *"Senior 5+ years"* roles, and dodging *"UX Designer"* jobs that secretly just want social media banners drains the creative energy you should be putting into case studies and portfolio building.
 
-### 13 Target UX Disciplines
+**JobFather handles the grunt work.** 
+
+Every morning at 8:30 AM BST, it wakes up in the cloud, crawls 8 different job platforms, uses Gemini AI to filter out noise and deceptive titles, checks a deduplication database so you never see the same circular twice, and pings your Telegram with clean, curated leads.
+
+---
+
+## 🏗️ System Architecture
+
+```mermaid
+flowchart TD
+    Cron["⏰ GitHub Actions Cloud Cron (8:30 AM BST)"] --> Runner["⚡ Headless Ubuntu Runner"]
+    
+    subgraph Ingestion["🌐 8 Live Scraping Pipelines"]
+        LNK["LinkedIn Direct API"]
+        BDJ["Bdjobs Official API"]
+        REM["Remotive Global API"]
+        WWR["We Work Remotely (RSS)"]
+        ROK["RemoteOK API"]
+        FB["Facebook Groups (via Apify Cloud)"]
+        HIM["Himalayas & Wellfound"]
+        TECH["Bangladesh Tech Giants (Therap, Brain Station, bKash, Pathao...)"]
+    end
+    
+    Runner --> Ingestion
+    Ingestion --> Dedupe{"🔍 Seen Before?<br/>(seen_jobs.json)"}
+    
+    Dedupe -->|Already Alerted| Skip["⏭️ Skip"]
+    Dedupe -->|Brand New| Brain["🧠 Google Gemini AI"]
+    
+    subgraph Intelligence["🎯 Semantic AI Filtering"]
+        Brain --> F1["Filter strictly for 13 UX Disciplines"]
+        Brain --> F2["Discard Graphic Design / Social Media Banners"]
+        Brain --> F3["Target Entry-Level, Junior & Freshers"]
+        Brain --> F4["Identify Real Business Industry (FinTech, SaaS...)"]
+    end
+    
+    Intelligence --> Telegram["📱 Telegram Bot API (Personal Digest)"]
+    Telegram --> GitSave["💾 Save Updated Memory back to GitHub Repo"]
+```
+
+---
+
+## 🎯 What JobFather Filters For
+
+### 13 Target UX Disciplines:
 1. **UX Designer**
-2. **UX/UI Designer / UI/UX Designer**
-3. **Product Designer**
-4. **UX Researcher**
-5. **Interaction Designer**
-6. **Information Architect**
-7. **UX Strategist**
-8. **Service Designer**
-9. **Accessibility Specialist**
-10. **AI UX Designer**
-11. **AI Agent Designer** (Autonomous Experience Designer)
-12. **Design Engineer** (UX Engineer)
-13. **Design System Specialist**
+2. **UI/UX Designer / Product Designer**
+3. **UX Researcher**
+4. **Interaction Designer**
+5. **Information Architect**
+6. **UX Strategist**
+7. **Service Designer**
+8. **Accessibility Specialist (a11y)**
+9. **AI UX Designer**
+10. **AI Agent Designer**
+11. **Design Engineer (UX Engineer)**
+12. **Design System Specialist**
+13. **Product Design Intern / Trainee**
+
+### Negative Filters (Auto-Discarded):
+* ❌ Roles requiring 3–5+ years of experience
+* ❌ Graphic design, print flyers, social media banners, marketing graphics
+* ❌ Deceptive circulars using "UX" just for keyword clicks
 
 ---
 
-## 2. Directory Structure & Files
+## 🚀 How to Set This Up for Yourself
+
+You can easily fork and customize this bot for your own job search:
+
+### 1. Fork this Repository
+Click the **Fork** button in the top-right corner to copy this project to your GitHub account.
+
+### 2. Configure Your Secrets
+Go to your forked repository's **Settings ➡️ Secrets and variables ➡️ Actions**, and add:
+
+| Secret Name | How to Get It |
+| :--- | :--- |
+| `TELEGRAM_BOT_TOKEN` | Create a free bot with [@BotFather](https://t.me/BotFather) on Telegram |
+| `TELEGRAM_CHAT_ID` | Message [@userinfobot](https://t.me/userinfobot) to get your Chat ID |
+| `GEMINI_API_KEY` | Generate a free API key at [Google AI Studio](https://aistudio.google.com/) |
+| `APIFY_TOKEN` | Get free $5/month credits from [Apify Console](https://console.apify.com/) |
+
+### 3. Customize Your Priorities
+Open `jobfinder/jobfather.py` and modify the prompt inside `filter_with_ai_and_notify()` to match your dream job criteria, target locations, or experience level.
+
+---
+
+## 📁 Project Structure
 
 ```
-jobfinder/
-├── jobfather.py         # Main execution script with 8 scraping pipelines & Gemini AI
-├── requirements.txt     # Python dependencies (requests, beautifulsoup4, google-genai)
-├── seen_jobs.json       # Deduplication history (prevents duplicate Telegram alerts)
-└── README.md            # Comprehensive system documentation and operational runbook
+├── .github/workflows/
+│   └── daily_jobfather.yml    # Serverless GitHub Actions daily cron schedule
+├── jobfinder/
+│   ├── jobfather.py           # Core scraper, AI pipeline & Telegram bot engine
+│   ├── requirements.txt       # Python dependencies
+│   ├── seen_jobs.json         # Deduplication memory ledger
+│   └── .env.example           # Environment variable template
+└── README.md                  # Project documentation
 ```
 
-- **Automation Workflow**: [`.github/workflows/daily_jobfather.yml`](file:///Users/farhanamahbuba/Downloads/claude-for-designers-main/.github/workflows/daily_jobfather.yml) (Runs daily at 8:30 AM BST / 2:30 AM UTC)
-- **GitHub Repository**: [https://github.com/labonifarhana857-commits/jobfather.git](https://github.com/labonifarhana857-commits/jobfather.git)
+---
+
+## 👩‍💻 Author
+
+**Farhana Mahbuba Laboni**  
+*UX Designer with a B.Sc in Computer Science & Engineering*  
+[LinkedIn Profile](https://www.linkedin.com/in/farhanamahbuba)
 
 ---
 
-## 3. Integrations & Configuration (GitHub Secrets)
-
-The bot loads all sensitive keys securely from environment variables. When running in GitHub Actions, configure these in **Repository Settings > Secrets and variables > Actions**:
-
-| Secret Name | Description | Example / Format |
-| :--- | :--- | :--- |
-| `TELEGRAM_BOT_TOKEN` | Bot authorization token from `@BotFather` | `1234567890:ABCdefGHIjklMNOpqrs` |
-| `TELEGRAM_CHAT_ID` | Your personal or group chat ID | `8468561197` |
-| `GEMINI_API_KEY` | Google AI Studio Gemini API Key | `AIzaSy...` |
-| `APIFY_TOKEN` | Apify Console API Token (for Facebook scrapers) | `apify_api_...` |
-
----
-
-## 4. The 8 Live Scraping Pipelines
-
-1. **LinkedIn Direct Guest API**: Scrapes live BD and Worldwide Remote entry-level UX circulars across Bangladesh and global remote queries.
-2. **Remotive Official API**: Direct JSON endpoint querying active global remote design roles.
-3. **We Work Remotely (WWR)**: XML RSS feed parsing worldwide remote product and UX design postings.
-4. **RemoteOK Direct API**: Direct JSON feed for tech startup remote design roles.
-5. **Bdjobs Official API & Specialist Design Boards**: Direct JSON API connection to Bdjobs (`api.bdjobs.com`), UI/UX Jobs Board Bangladesh (`uiuxjobsboard.com`), JobTogether Remote (`jobtogether.com`), Careerjet (BD & Global), and RemoteRocketship.
-6. **All 5 Target Bangladesh Facebook Groups (via Apify & Feeds)**:
-   - [UX Bangladesh](https://www.facebook.com/groups/uxbangladesh/)
-   - [BD UI/UX Designers](https://www.facebook.com/groups/bduiuxdesigners/)
-   - [UI/UX Bangladesh Community (237536162264896)](https://www.facebook.com/groups/237536162264896/)
-   - [UI/UX BD](https://www.facebook.com/groups/uiuxbd/)
-   - [UIUX Bangladesh](https://www.facebook.com/groups/UIUXBangladesh/)
-7. **Tech Startups (Himalayas & Wellfound)**: Official Himalayas JSON API (`himalayas.app`) and Wellfound seed/series-A tech startup design roles.
-8. **Top Bangladesh Tech Directory**:
-   - **Telecoms**: Grameenphone, Banglalink, Robi Axiata
-   - **MNCs & Enterprise**: Daraz (Alibaba), Optimizely, Walton Digi-Tech, TigerIT, a2i
-   - **Fintech & Startups**: bKash, Pathao, Chaldal, 10 Minute School, Shikho, Jatri, ShopUp
-   - **Software Exporters**: Therap BD, Brain Station 23, Cefalo, Selise, BJIT, Kaz Software, Kona SL
-   - **SaaS & Agencies**: Ollyo, WPDeveloper, weDevs, Themeum, Musemind, Augmedix
-
----
-
-## 5. AI Filtering & Classification Rules
-
-1. **Graphic Design Trap Filter**: Discards roles primarily asking for social media banners, marketing flyers, or video editing.
-2. **Experience Guardrail**: Strictly prioritizes 0–1 year / internships / freshers. If strict 0-year roles are scarce, negotiable 0–2 year roles are included as recommended matches.
-3. **CSE Advantage Badge**: Automatically tags roles mentioning CSE/IT degrees or technical design (e.g. Design Systems, frontend bridging) with `🌟 CSE Advantage: ⭐ High Match!`.
-4. **Output Card Schema**:
-   ```
-   📌 [Job Title] - [Company Name]
-   • 🏢 Industry: [Actual business domain: FinTech / HealthTech / E-Commerce / EdTech / Enterprise SaaS / Telecom / Offshore IT / Agency]
-   • 🌐 Source: [e.g. LinkedIn / Bdjobs / UI/UX Jobs Board / Facebook Community / Remotive / WWR / RemoteOK / JobTogether / Wellfound]
-   • Type: [Internship / Part-time / Full-time / Remote / Hybrid]
-   • 📍 Location: [e.g. Dhaka (Bashundhara/Gulshan/Banani/Dhanmondi/Uttara) or Remote Worldwide]
-   • 💵 Compensation: [Paid / Unpaid / Competitive / Not specified]
-   • 🌟 CSE Advantage: [⭐ High Match - Mentions CSE or Technical UX! / Good UX match]
-   • Summary: [1-2 sentences on what they are building and key design requirements]
-   • Deadline: [Application date or 'Not mentioned']
-   • Link: [Direct URL]
-   ```
-5. **JobFather's Take**: A brief 1-line personalized recommendation or application strategy tip at the end of each digest.
-
----
-
-## 6. How to Run
-
-### Local Execution:
-```bash
-cd /Users/farhanamahbuba/Downloads/claude-for-designers-main/jobfinder
-pip install -r requirements.txt
-python jobfather.py
-```
-
-### GitHub Actions Schedule:
-- The GitHub Actions workflow runs autonomously every day at `8:30 AM BST` (`02:30 UTC`).
-- You can trigger a run at any time via the **Workflow Dispatch** button in your GitHub repository actions tab.
+## 📄 License
+This project is open-source under the [MIT License](LICENSE).
