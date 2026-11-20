@@ -1,263 +1,254 @@
-# JobFather Data Extraction Reliability Audit & Implementation Plan (Step 3)
+# JobFather Data Extraction Reliability Audit & Implementation Plan (v1.1 - Refined)
 
-**Document Status:** DRAFT FOR APPROVAL (Step 3)  
+**Document Status:** REVISED DRAFT FOR APPROVAL (Step 3.1)  
 **Governing Authority:** `CANDIDATE_PROFILE_SPEC.md` (Approved v1.1)  
-**Core Objective:** Establish reliable, verifiable extraction of job data from all 8 ingestion pipelines, eliminate search snippet pollution, define source-quality tiers, and specify a strict normalized extraction contract before AI classification occurs.
+**Core Objective:** Establish reliable extraction across all 13 ingestion sub-pipelines, decouple search snippets from job titles, define strict field-level provenance, standardize scraper health reporting, and establish a normalized extraction contract.
 
 ---
 
-## 1. Source-by-Source Extraction Audit
+## 1. Reconciled Source-by-Source Extraction Inventory
 
-The current implementation in `jobfinder/jobfather.py` relies on 12 distinct extraction sub-pipelines grouped into 8 caller functions.
+A complete audit of `jobfinder/jobfather.py` reveals exactly **13 extraction sub-pipelines** grouped under 8 caller functions.
 
-### Detailed Source Audit Matrix
+### The 13 Sub-Pipelines at a Glance:
+* **4 Structured APIs:** Remotive (SRC-02), RemoteOK (SRC-04), Bdjobs (SRC-05a), Himalayas (SRC-07a).
+* **1 Structured RSS Feed:** We Work Remotely (SRC-03).
+* **3 Direct Web Scrapers:** LinkedIn Direct (SRC-01), UI/UX Jobs Board (SRC-05b), BD Tech Giants LinkedIn (SRC-08a).
+* **1 Social Community Scraper:** Facebook Groups via Apify (SRC-06a).
+* **4 Search-Engine Discovery Fallbacks:** Portal DDG (SRC-05c), Facebook DDG (SRC-06b), Wellfound DDG (SRC-07b), BD Tech DDG (SRC-08b).
 
-| Pipeline Identifier | Source Name & Endpoint | Ingestion Mechanism | Responsible Function | Extracted Fields & Provenance | Failure & Missing Field Behavior | Current Vulnerabilities & Data Loss |
+---
+
+### Detailed Source Audit Matrix (All 13 Sub-Pipelines)
+
+| Pipeline ID | Source Name & Endpoint | Ingestion Mechanism | Responsible Function | Extracted Fields & Provenance | Failure & Missing Field Behavior | Current Vulnerabilities & Data Loss |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **SRC-01** | **LinkedIn Direct Search**<br>`linkedin.com/jobs-guest/...` | HTTP GET (HTML fragment parsing) | `fetch_linkedin_jobs` | • `title`: `h3.base-search-card__title`<br>• `company`: `h4.base-search-card__subtitle`<br>• `link`: `a.base-card__full-link` (query params stripped) | Missing title or link skips item. Missing company defaults to `"Company not listed"`. Network failure catches `Exception`, logs notice, returns `[]`. | DOM selector drift can yield 0 jobs silently. Full description, location, and salary are not present in search card list endpoint. |
-| **SRC-02** | **Remotive Design API**<br>`remotive.com/api/remote-jobs?category=design` | HTTP GET (JSON REST API) | `fetch_remotive_jobs` | • `title`: `item['title']`<br>• `company`: `item['company_name'] (item['candidate_required_location'])`<br>• `link`: `item['url']` | Missing fields default via `.get()`. Network failure logs notice, returns `[]`. | Merges location into company string (`"Company (Worldwide)"`). Does not extract publication date or experience level from JSON. |
-| **SRC-03** | **We Work Remotely (WWR)**<br>`weworkremotely.com/.../remote-design-jobs.rss` | HTTP GET (XML ElementTree parsing) | `fetch_wwr_rss` | • `title`: `item.find('title')`<br>• `link`: `item.find('link')`<br>• `summary`: `item.find('description')[:150]` | Missing XML node defaults to empty string. Network failure logs notice, returns `[]`. | **Data Loss:** Company name is **hardcoded** to `"Remote Global Tech"` rather than extracted from the RSS item's `title` (which WWR formats as `Company: Title`). |
-| **SRC-04** | **RemoteOK API**<br>`remoteok.com/api?tag=design` | HTTP GET (JSON REST API) | `fetch_remoteok_jobs` | • `title`: `item['position']`<br>• `company`: `item['company']`<br>• `link`: `item['url']` | Missing fields default via `.get()`. Slices `[1:15]` (index 0 is legal disclaimer). | Discards tags, location requirements, and date posted available in the JSON response. |
-| **SRC-05a** | **Bdjobs Official JSON API**<br>`api.bdjobs.com/.../GetJobSearch` | HTTP GET (JSON REST API) | `fetch_bd_and_remote_portals` | • `title`: `item['jobTitle']`<br>• `company`: `item['companyName']`<br>• `deadline`: `item['deadline']`<br>• `link`: `bdjobs.com/h/details/{job_id}` | Missing fields default via `.get()`. Missing `Jobid` skips item. Network failure logs notice. | Highly reliable local metadata. Full job description requires secondary request to details page. |
-| **SRC-05b** | **UI/UX Jobs Board Bangladesh**<br>`uiuxjobsboard.com/design-jobs/bangladesh` | HTTP GET (HTML link scraping) | `fetch_bd_and_remote_portals` | • `title`: `a[href*='/job/'].text`<br>• `link`: `href` | Link or title missing skips item. | **Data Loss:** Company name is **hardcoded** to `"UI/UX Jobs Board Employer"`. Does not parse company name from listing text. |
-| **SRC-05c** | **Portal Aggregator Search Fallback**<br>DuckDuckGo HTML query | HTTP POST (HTML fragment scraping) | `fetch_bd_and_remote_portals` | • `title`: `snippet.text[:140]` (**Search Snippet**)<br>• `company`: `"Hiring Company"` (**Placeholder**)<br>• `link`: `link_tag['href']` | Missing link or snippet skips item. HTTP 200 required; network error logs notice. | **CRITICAL:** Search snippet text is assigned directly to `title`. Company is a generic placeholder. Incomplete search clue enters pipeline as a verified job. |
-| **SRC-06a** | **Facebook Groups via Apify**<br>Apify Actor API | HTTP POST (JSON REST API) | `fetch_facebook_via_apify` | • `title`: `postText[:150]` (**Raw Post Text**)<br>• `company`: `groupTitle` (**Group Name**)<br>• `link`: `postUrl` | Missing text skips item. Actor failure catches `Exception`, triggers fallback. | **CRITICAL:** Unstructured social media post text (including questions, comments, or discussions) is assigned directly to `title`. Company is set to the Facebook group name. |
-| **SRC-06b** | **Facebook Community Search Fallback**<br>DuckDuckGo HTML query | HTTP POST (HTML fragment scraping) | `fetch_facebook_via_apify` | • `title`: `snippet.text[:140]` (**Search Snippet**)<br>• `company`: `"Facebook Design Community"`<br>• `link`: `link_tag['href']` | Triggers only if Apify returns $<2$ posts. | **CRITICAL:** Snippet text is assigned to `title`. Post may be discussion, portfolio review request, or question rather than an active job. |
-| **SRC-07a** | **Himalayas Startup API**<br>`himalayas.app/jobs/api?category=design` | HTTP GET (JSON REST API) | `fetch_wellfound_jobs` | • `title`: `item['title']`<br>• `company`: `item['companyName']`<br>• `link`: `item['applicationLink']` or `item['url']` | Missing fields default via `.get()`. | Highly reliable startup API. Location requirements and full description available in JSON are currently discarded. |
-| **SRC-07b** | **Wellfound Search Fallback**<br>DuckDuckGo HTML query | HTTP POST (HTML fragment scraping) | `fetch_wellfound_jobs` | • `title`: `snippet.text[:140]` (**Search Snippet**)<br>• `company`: `"Seed/Series-A Startup"`<br>• `link`: `link_tag['href']` | Missing link skips item. | **CRITICAL:** Search snippet assigned to `title`. Company is a generic placeholder. |
-| **SRC-08a** | **BD Tech Giants LinkedIn Search**<br>`linkedin.com/jobs-guest/...` | HTTP GET (HTML fragment parsing) | `fetch_complete_bd_companies` | • `title`: `h3.base-search-card__title`<br>• `company`: `h4.base-search-card__subtitle` or target company name<br>• `link`: `clean_url` | Missing title/link skips item. | Good local discovery for 12 major employers (bKash, Pathao, Therap, Brain Station 23, etc.). |
-| **SRC-08b** | **BD Tech Directory Search Fallback**<br>DuckDuckGo HTML query | HTTP POST (HTML fragment scraping) | `fetch_complete_bd_companies` | • `title`: `snippet.text[:140]` (**Search Snippet**)<br>• `company`: `"Bangladesh Tech Employer"`<br>• `link`: `link_tag['href']` | Missing link skips item. | **CRITICAL:** Search snippet assigned to `title`. Company is a generic placeholder. |
+| **SRC-01** | **LinkedIn Direct Search**<br>`linkedin.com/jobs-guest/...` | HTTP GET (HTML card fragment) | `fetch_linkedin_jobs` | • `title`: `h3.base-search-card__title`<br>• `company`: `h4.base-search-card__subtitle`<br>• `link`: `a.base-card__full-link` | Missing title or link skips item. Missing company defaults to `"Company not listed"`. Network error logs notice, returns `[]`. | DOM selector drift can yield 0 jobs silently. Full description, location, and experience absent from list card. |
+| **SRC-02** | **Remotive Design API**<br>`remotive.com/api/remote-jobs` | HTTP GET (JSON REST API) | `fetch_remotive_jobs` | • `title`: `item['title']`<br>• `company`: `item['company_name']`<br>• `location`: `item['candidate_required_location']`<br>• `link`: `item['url']` | Missing fields default via `.get()`. Network error logs notice, returns `[]`. | Merges location into company string (`"Company (Worldwide)"`). Discards publication date and experience tags present in JSON. |
+| **SRC-03** | **We Work Remotely (WWR)**<br>`weworkremotely.com/...rss` | HTTP GET (XML RSS Feed) | `fetch_wwr_rss` | • `title`: `item.find('title')`<br>• `link`: `item.find('link')`<br>• `summary`: `item.find('description')[:150]` | Missing XML node defaults to empty string. Network error logs notice, returns `[]`. | **Data Loss:** Hardcodes company name to `"Remote Global Tech"`, completely ignoring that WWR formats `<title>` as `Company Name: Job Title`. |
+| **SRC-04** | **RemoteOK API**<br>`remoteok.com/api?tag=design` | HTTP GET (JSON REST API) | `fetch_remoteok_jobs` | • `title`: `item['position']`<br>• `company`: `item['company']`<br>• `link`: `item['url']` | Slices `[1:15]` (index 0 is legal disclaimer). Missing fields default via `.get()`. | Discards tags, location requirements, and date posted available in JSON. |
+| **SRC-05a** | **Bdjobs Official API**<br>`api.bdjobs.com/...` | HTTP GET (JSON REST API) | `fetch_bd_and_remote_portals` | • `title`: `item['jobTitle']`<br>• `company`: `item['companyName']`<br>• `deadline`: `item['deadline']`<br>• `link`: `bdjobs.com/h/details/{id}` | Missing `Jobid` skips item. Network error logs notice. | Reliable local metadata. Detailed job description requires secondary request. |
+| **SRC-05b** | **UI/UX Jobs Board BD**<br>`uiuxjobsboard.com/...` | HTTP GET (HTML scraping) | `fetch_bd_and_remote_portals` | • `title`: `a[href*='/job/'].text`<br>• `link`: `href` | Missing title/link skips item. | **Data Loss:** Company name is hardcoded to `"UI/UX Jobs Board Employer"`; does not parse company from card text. |
+| **SRC-05c** | **Portals DDG Search Fallback**<br>DuckDuckGo HTML query | HTTP POST (HTML fragment) | `fetch_bd_and_remote_portals` | • `title`: `snippet.text[:140]`<br>• `company`: `"Hiring Company"`<br>• `link`: `link_tag['href']` | Missing link skips item. | **Search Snippet Pollution:** Search snippet sentence is assigned to `title`. Company is a generic placeholder. |
+| **SRC-06a** | **Facebook Groups via Apify**<br>Apify Actor API | HTTP POST (JSON REST API) | `fetch_facebook_via_apify` | • `title`: `postText[:150]`<br>• `company`: `groupTitle`<br>• `link`: `postUrl` | Missing text skips item. Actor failure triggers fallback. | **Social Post Pollution:** Raw social post text (including discussions/questions) placed into `title`. Company set to group name. |
+| **SRC-06b** | **Facebook DDG Fallback**<br>DuckDuckGo HTML query | HTTP POST (HTML fragment) | `fetch_facebook_via_apify` | • `title`: `snippet.text[:140]`<br>• `company`: `"Facebook Design Community"`<br>• `link`: `link_tag['href']` | Triggers if Apify returns $<2$ posts. | **Search Snippet Pollution:** Snippet text assigned to `title`. Post may be discussion rather than a job vacancy. |
+| **SRC-07a** | **Himalayas Startup API**<br>`himalayas.app/jobs/api` | HTTP GET (JSON REST API) | `fetch_wellfound_jobs` | • `title`: `item['title']`<br>• `company`: `item['companyName']`<br>• `link`: `item['applicationLink']` | Missing fields default via `.get()`. | Reliable startup endpoint. Location restrictions available in JSON are currently discarded. |
+| **SRC-07b** | **Wellfound DDG Fallback**<br>DuckDuckGo HTML query | HTTP POST (HTML fragment) | `fetch_wellfound_jobs` | • `title`: `snippet.text[:140]`<br>• `company`: `"Seed/Series-A Startup"`<br>• `link`: `link_tag['href']` | Missing link skips item. | **Search Snippet Pollution:** Search snippet assigned to `title`. Company is a generic placeholder. |
+| **SRC-08a** | **BD Tech Giants LinkedIn**<br>`linkedin.com/jobs-guest/...` | HTTP GET (HTML fragment) | `fetch_complete_bd_companies` | • `title`: `h3.base-search-card__title`<br>• `company`: `h4.base-search-card__subtitle` or target company<br>• `link`: `clean_url` | Missing title/link skips item. | Good local discovery for 12 major employers (bKash, Pathao, Therap, Brain Station 23, etc.). |
+| **SRC-08b** | **BD Tech DDG Fallback**<br>DuckDuckGo HTML query | HTTP POST (HTML fragment) | `fetch_complete_bd_companies` | • `title`: `snippet.text[:140]`<br>• `company`: `"Bangladesh Tech Employer"`<br>• `link`: `link_tag['href']` | Missing link skips item. | **Search Snippet Pollution:** Search snippet assigned to `title`. Company is a generic placeholder. |
 
 ---
 
-## 2. Core Weaknesses in Current Data Flow
+## 2. Decoupling Extraction Completeness, Snippet Origin, and Field Failures
 
-1. **Search Snippet Title Pollution:**  
-   In 5 out of 12 pipelines (SRC-05c, SRC-06b, SRC-07b, SRC-08b), the text extracted from DuckDuckGo search snippets (e.g., *"Looking for an energetic individual who understands user personas and wireframes. Apply by sending resume..."*) is directly assigned to the `title` field.  
-   *Result:* Gemini evaluates an unstructured sentence fragment as a job title.
-2. **Generic Company Placeholders:**  
-   Pipelines SRC-05c, SRC-07b, and SRC-08b assign hardcoded placeholder strings (`"Hiring Company"`, `"Seed/Series-A Startup"`, `"Bangladesh Tech Employer"`) when the company name cannot be parsed from the search result.  
-   *Result:* Gemini cannot classify the hiring company's actual business domain and cannot evaluate company legitimacy.
-3. **Facebook Post Text as Job Title:**  
-   In SRC-06a and SRC-06b, raw post body text (up to 150 characters) is placed directly into `title`. Posts in design communities often include portfolio feedback requests, discussions, or general questions that mention keywords like "hiring" or "intern" in comments.
-4. **Hardcoded Fallbacks Destroying Available Metadata:**  
-   In SRC-03 (WWR RSS), the company name is hardcoded to `"Remote Global Tech"`, completely ignoring the fact that WWR feeds provide the real company name in the `<title>` tag before the colon (`Company: Job Title`).
-5. **No Field Provenance or Status Flagging:**  
-   Currently, a cleanly extracted official API record from Bdjobs is indistinguishable in the `combined_data` list from a raw search snippet from DuckDuckGo. Downstream AI filtering receives both as identical dictionaries.
+To eliminate architectural contradictions, the pipeline strictly decouples three independent concepts:
+
+```text
+[Record Origin]           [Field Completeness]           [Overall Status]
+is_snippet_only: bool      missing_fields: list           extraction_status: str
+───────────────────────   ────────────────────           ──────────────────────
+Did this record come      Which specific fields          Can this record be fully
+from a search snippet     could not be resolved          screened, partially evaluated,
+or an actual listing?     (e.g. ['company_name'])        or is it discovery-only?
+```
+
+### Definitions:
+
+1. **`is_snippet_only` (Boolean - Origin Flag):**
+   * `True`: The candidate record originates **strictly from a search engine result snippet** (e.g. DuckDuckGo result) where the actual listing page has not been fetched or parsed.
+   * `False`: The candidate record originates from a structured API, an RSS feed, or a direct job card/listing page.
+   * *Critical Disambiguation:* A direct LinkedIn card that has a valid job title but fails to extract a company name has `is_snippet_only = False`. A missing company does *not* mean the title came from a search snippet.
+
+2. **`missing_fields` (List of Strings - Audit Trail):**
+   * Enumerates every individual attribute that could not be resolved from the source payload and was set to `None`.
+   * Example: `["company_name", "salary_raw", "experience_raw"]`.
+
+3. **`extraction_status` (Enum - Completeness State):**
+   * `FULLY_EXTRACTED`: Essential fields (`raw_title`, `company_name`, `job_url`) are present and verified directly from the listing/API. Missing optional metadata (such as salary or deadline) does **not** downgrade a record from `FULLY_EXTRACTED`.
+   * `PARTIALLY_EXTRACTED`: Originates from a direct job card or API, but an essential field (e.g. `company_name` or `location_raw`) could not be parsed.
+   * `DISCOVERY_ONLY`: Originates from a search result snippet or unparsed social media post. The target listing itself has not been parsed.
 
 ---
 
-## 3. Proposed Standardized Extraction Contract
+## 3. Standardized Normalized Extraction Contract
 
-To guarantee data integrity and eliminate hallucinations, every scraper must produce a normalized Python dictionary conforming to this strict contract:
+Every ingestion pipeline will output records conforming to this Python contract:
 
 ```python
-job_record = {
-    # 1. Identifiers & Provenance
-    "job_id": str,                  # Unique per-run ID: "job_001", "job_002"
-    "source_name": str,            # "LinkedIn", "Bdjobs", "Remotive", "WWR", "RemoteOK", "Himalayas", "Apify-Facebook", "Web-Search"
-    "source_type": str,            # "OFFICIAL_API" | "OFFICIAL_RSS" | "DIRECT_SCRAPE" | "SEARCH_DISCOVERY" | "COMMUNITY_POST"
-    "source_quality_tier": int,    # Tier 1 (Highest) to Tier 5 (Discovery Clue)
-    "source_url": str,             # URL of the search/endpoint where discovered
-    "job_url": str,                # Canonical, cleaned application/details URL (mandatory)
+normalized_record = {
+    # --- 1. Execution & Provenance Tracking ---
+    "run_candidate_id": str,        # Ephemeral per-run token: "run_001", "run_002" (NOT a permanent vacancy ID)
+    "source_name": str,             # "LinkedIn", "Bdjobs", "Remotive", "WWR", "RemoteOK", "Himalayas", "Apify-Facebook", "Web-Search"
+    "source_type": str,             # "STRUCTURED_API" | "STRUCTURED_FEED" | "DIRECT_PAGE_SCRAPE" | "COMMUNITY_POST" | "SEARCH_SNIPPET"
+    "ingestion_tier": int,          # Tier 1 (API) to Tier 5 (Search Discovery)
+    "source_url": str,              # The exact URL or endpoint where the discovery occurred
+    "job_url": str,                 # Canonical, resolved target URL (tracking parameters stripped)
     
-    # 2. Extracted Job Metadata (Original Ground-Truth)
-    "raw_title": str,              # Verbatim title from listing, or None if snippet-only
-    "normalized_title": str,       # Cleaned title (stripped whitespace, boilerplate), or None
-    "company_name": str,           # Verbatim company name, or None if unknown
-    "location_raw": str or None,   # Raw location string (e.g. "Dhaka, Bangladesh", "Worldwide")
-    "remote_type": str,            # "ON_SITE" | "HYBRID" | "REMOTE_WORLDWIDE" | "REMOTE_REGIONAL" | "UNKNOWN"
-    "experience_raw": str or None, # Raw stated experience (e.g. "0-2 years", "Freshers encouraged")
-    "employment_type": str,        # "FULL_TIME" | "INTERNSHIP" | "TRAINEE" | "CONTRACT" | "UNKNOWN"
-    "salary_raw": str or None,     # Raw compensation string, or None
-    "deadline_raw": str or None,   # Raw deadline date, or None
-    "description_snippet": str,    # Clean text summary (max 300 chars)
+    # --- 2. Ground-Truth Listing Metadata (Raw Extracted Values) ---
+    "raw_title": str or None,       # Verbatim job title from listing, or None if snippet-only
+    "company_name": str or None,    # Verbatim hiring company, or None if unverified (NEVER placeholder)
+    "location_raw": str or None,    # Raw location string (e.g., "Dhaka, Bangladesh", "Worldwide")
+    "remote_type": str,             # "ON_SITE" | "HYBRID" | "REMOTE_WORLDWIDE" | "REMOTE_REGIONAL" | "UNKNOWN"
+    "experience_raw": str or None,  # Stated experience requirement (e.g. "0-2 years", "Freshers encouraged")
+    "employment_type": str,         # "FULL_TIME" | "INTERNSHIP" | "TRAINEE" | "CONTRACT" | "UNKNOWN"
+    "salary_raw": str or None,      # Stated compensation, or None
+    "posted_date": str or None,     # Publication date string or ISO timestamp if available, or None
+    "deadline_raw": str or None,    # Application deadline if available, or None
     
-    # 3. Extraction Health & Provenance Flags
-    "extraction_status": str,      # "FULLY_EXTRACTED" | "PARTIALLY_EXTRACTED" | "DISCOVERY_ONLY"
-    "is_snippet_only": bool,       # True if title/company could not be verified from listing
-    "missing_fields": list,        # List of missing mandatory/expected fields: ["company_name", "experience_raw"]
-    "field_provenance": dict       # Maps each field to its extraction method: {"title": "DOM_H3", "company": "API_FIELD"}
+    # --- 3. Content Separation: Description vs. Search Snippet ---
+    "description_excerpt": str,     # Real text excerpt from job description / API body (max 500 chars)
+    "discovery_snippet": str,       # Search engine snippet or raw social text (max 300 chars)
+    
+    # --- 4. Quality & Audit Flags ---
+    "is_snippet_only": bool,        # True if record comes strictly from a search engine result
+    "extraction_status": str,       # "FULLY_EXTRACTED" | "PARTIALLY_EXTRACTED" | "DISCOVERY_ONLY"
+    "missing_fields": list,         # List of fields that evaluated to None
+    "field_provenance": dict        # Maps fields to source mechanism:
+                                    # {"raw_title": "DOM_H3", "company_name": "API_FIELD", "job_url": "CANONICAL_LINK"}
 }
 ```
 
-### Detailed Field Specification Table
+### Purpose and Rule for Key Fields:
+* `source_url` vs `job_url`: `source_url` records *where* the lead was discovered (e.g. `https://html.duckduckgo.com/html/` or Remotive API endpoint). `job_url` records the *actual destination vacancy* (e.g. `https://careers.company.com/job/123`). Search result URLs must never be described as verified job pages until resolved.
+* `description_excerpt` vs `discovery_snippet`: Text extracted from an actual job page or API body belongs in `description_excerpt`. Search engine result snippets belong strictly in `discovery_snippet`.
+* `raw_title` and `company_name`: If unverified, they are set to `None`. Placeholders such as `"Hiring Company"` or `"Seed/Series-A Startup"` are strictly prohibited.
+* `run_candidate_id`: A temporary identifier (`run_001`, `run_002`) used to coordinate LLM input/output within a single execution. It is never treated as a persistent vacancy identifier.
 
-| Field | Type | Mandatory? | Extraction Method | Missing / Unknown Representation |
+---
+
+## 4. Ingestion Tiers & Field-Level Provenance
+
+Ingestion tiers describe the **transport mechanism**, not a blanket guarantee of field truth.
+
+| Ingestion Tier | Transport Mechanism | Sources | Typical Field Reliability | What It CANNOT Guarantee |
 | :--- | :--- | :--- | :--- | :--- |
-| `job_id` | `str` | **Mandatory** | Generated sequentially at aggregation: `f"job_{idx:03d}"` | N/A (Always generated) |
-| `source_name` | `str` | **Mandatory** | Static string per pipeline module | N/A |
-| `source_type` | `str` | **Mandatory** | Assigned based on pipeline architecture | N/A |
-| `source_quality_tier` | `int` | **Mandatory** | 1 (Official API) to 5 (Search Discovery) | N/A |
-| `job_url` | `str` | **Mandatory** | Cleaned HTTP/HTTPS URL (tracking parameters stripped) | If missing/invalid, record is **dropped** |
-| `raw_title` | `str` / `None` | Optional | Extracted from DOM title or API field | `None` (Never fill with search snippet) |
-| `company_name` | `str` / `None` | Optional | Extracted from DOM subtitle or API field | `None` (Never fill with "Hiring Company") |
-| `location_raw` | `str` / `None` | Optional | Extracted from location tag or API attribute | `None` |
-| `remote_type` | `str` | **Mandatory** | Rule-based parser on location string | `"UNKNOWN"` |
-| `experience_raw` | `str` / `None` | Optional | Extracted from JD text or API experience tag | `None` (Never assume 0 or 5 years) |
-| `employment_type` | `str` | **Mandatory** | Keyword rule on title/JD (Intern, Trainee, Full-time) | `"UNKNOWN"` |
-| `salary_raw` | `str` / `None` | Optional | Extracted compensation text | `None` |
-| `deadline_raw` | `str` / `None` | Optional | Extracted deadline date string | `None` |
-| `description_snippet` | `str` | Optional | First 300 chars of job description or snippet | `""` |
-| `extraction_status` | `str` | **Mandatory** | Computed: `FULLY_EXTRACTED`, `PARTIALLY_EXTRACTED`, `DISCOVERY_ONLY` | N/A |
-| `is_snippet_only` | `bool` | **Mandatory** | `True` if `raw_title` or `company_name` is `None` | N/A |
-| `missing_fields` | `list` | **Mandatory** | List of fields that evaluated to `None` | `[]` if fully extracted |
+| **Tier 1** | **Structured API** | Remotive, Bdjobs API, RemoteOK, Himalayas | High title, company, and URL stability. | Does not guarantee that the vacancy is currently active or that experience requirements are present in the list endpoint. |
+| **Tier 2** | **Structured Feed** | We Work Remotely (WWR RSS) | Clean title and description. | Company name requires parsing from title string (`Company: Title`). |
+| **Tier 3** | **Direct Page Scrape** | LinkedIn Guest API, UI/UX Jobs Board, BD Tech Giants | Real title and company card elements. | Experience, salary, and full description are typically absent from list cards. |
+| **Tier 4** | **Social Community Scraper** | Facebook Groups via Apify Actor | Real community post text and author URL. | Cannot guarantee that the post is an active job announcement (could be a discussion or inquiry). |
+| **Tier 5** | **Search Discovery Result** | DuckDuckGo fallbacks (Portals, Facebook, Wellfound, BD Tech) | Preserves candidate destination URL. | **Cannot establish title or company.** Snippets are search result fragments, not structured listings. |
+
+### Field-Level Provenance Mapping:
+Every extracted field records its exact extraction origin in `field_provenance`:
+* `"API_FIELD"`: Directly deserialized from an API response key.
+* `"RSS_TAG"`: Parsed from an XML element in an RSS/Atom feed.
+* `"DOM_SELECTOR"`: Extracted from a specific HTML tag in a direct job card.
+* `"PARSED_TITLE_PREFIX"`: Parsed from structured title text (e.g. WWR `Company: Title`).
+* `"SEARCH_SNIPPET"`: Extracted from search engine snippet text.
+* `"NOT_PROVIDED"`: Field was absent in payload and set to `None`.
 
 ---
 
-## 4. Source-Quality Levels
+## 5. Strategy for Eliminating Search Snippet & Social Post Pollution
 
-Pipelines are classified into 5 architectural quality tiers:
+### A. Search Engine Results (The 4 DuckDuckGo Fallbacks)
+For pipelines SRC-05c, SRC-06b, SRC-07b, and SRC-08b:
+1. `raw_title` **must be set to `None`**. Snippet text must never be truncated and assigned to `title`.
+2. `company_name` **must be set to `None`**. Placeholders like `"Hiring Company"` are deleted.
+3. `discovery_snippet` receives the search result text. `description_excerpt` is set to `""`.
+4. `is_snippet_only` is set to `True`.
+5. `extraction_status` is set to `"DISCOVERY_ONLY"`.
+6. `missing_fields` records `["raw_title", "company_name"]`.
 
-| Tier | Quality Level | Sources | What It Reliably Establishes | What It Cannot Guarantee |
-| :--- | :--- | :--- | :--- | :--- |
-| **Tier 1** | **Structured Official API** | Remotive, Bdjobs API, RemoteOK, Himalayas | Verified job title, verified company name, canonical direct URL, structured deadline/location. | Does not guarantee that the job hasn't closed in the last 24 hours. |
-| **Tier 2** | **Official RSS / XML Feed** | We Work Remotely (WWR) | Verified job URL, verified title, clean text description. | Company name requires parsing from title string (`Company: Title`). |
-| **Tier 3** | **Direct Job-Page Extraction** | LinkedIn Guest API, UI/UX Jobs Board, BD Tech Giants LinkedIn | Verified job title, verified hiring company, canonical LinkedIn URL. | Full experience requirements and compensation are absent from the list endpoint. |
-| **Tier 4** | **Social / Community Scraper** | Facebook Groups via Apify Actor | Real community post URL, author/group name, post body text. | Cannot guarantee that the post is an active hiring notice (could be a question or discussion). |
-| **Tier 5** | **Search-Engine Discovery Result** | DuckDuckGo Portals, Wellfound, Facebook & BD Tech directory fallbacks | Canonical web link where target keywords were indexed. | **Cannot establish title or company.** Snippets are search result fragments, not structured job records. |
-
----
-
-## 5. Strategy for Eliminating Search Snippet Title Pollution
-
-### The Core Rule: "A Search Snippet is a Discovery Clue, Not a Job Record"
-
-To eliminate hallucinated titles and placeholder companies without losing discovery clues, the pipeline must enforce this three-part rule:
-
-1. **Title and Company Sanitization:**
-   * When processing DuckDuckGo search results, the scraper **must never** assign `snippet.text` to `raw_title`.
-   * The scraper **must never** assign `"Hiring Company"` or `"Seed/Series-A Startup"` to `company_name`.
-   * For Tier 5 search results:
-     ```python
-     job_record["raw_title"] = None
-     job_record["company_name"] = None
-     job_record["description_snippet"] = snippet.text[:300]
-     job_record["is_snippet_only"] = True
-     job_record["extraction_status"] = "DISCOVERY_ONLY"
-     job_record["missing_fields"] = ["raw_title", "company_name"]
-     ```
-2. **Facebook Post Text Sanitization:**
-   * Apify post text must be stored in `description_snippet`, not `raw_title`.
-   * If an explicit job title cannot be regex-extracted from the post (e.g. `r'(?i)hiring\s+(?:a\s+)?([A-Z][a-zA-Z/ ]+Designer)'`), set `raw_title = None`.
-   * Set `is_snippet_only = True` and `extraction_status = "DISCOVERY_ONLY"`.
-3. **Routing Incomplete Candidates Directly to Needs Review:**
-   * Any candidate where `is_snippet_only is True` or `raw_title is None` **must never enter the primary digest as a Core Match**.
-   * In compliance with `CANDIDATE_PROFILE_SPEC.md` Rule #11, all `DISCOVERY_ONLY` candidates are deterministically routed to `NEEDS_REVIEW` (persisted to `needs_review.json`).
-   * Gemini is instructed to evaluate the snippet solely to determine if it is relevant to UX design; if relevant, it outputs `decision = "NEEDS_REVIEW"` with a clear rationale, preserving the URL for the user without faking a job title.
+### B. Facebook Community Posts (Apify SRC-06a & DDG SRC-06b)
+Facebook group posts are community interactions, not structured job boards. Relying on a single regex (e.g. `r'hiring.*Designer'`) misses researchers, interns, and design engineers, while falsely capturing questions like *"Are any agencies hiring junior designers right now?"*.
+1. **Raw Post Storage:** The complete post text is stored in `discovery_snippet`.
+2. **Explicit Title Resolution:** Set `raw_title = None` by default unless an unambiguous, standalone job header is present (e.g., lines starting with `Job Title:` or `Position:`).
+3. **Company Name Resolution:** Set `company_name = None`. Group names (e.g., *"UX Bangladesh"*) must **never** be assigned as the hiring company.
+4. **Candidate Classification:** All Facebook community leads are flagged as `source_type = "COMMUNITY_POST"`, `is_snippet_only = True`, and `extraction_status = "DISCOVERY_ONLY"`.
+5. **Downstream Routing:** In compliance with `CANDIDATE_PROFILE_SPEC.md` Rule #11, all `DISCOVERY_ONLY` leads are routed to `NEEDS_REVIEW` (persisted in `needs_review.json`). They are never presented as verified Core Matches in the primary Telegram digest.
 
 ---
 
-## 6. Extraction Failure & Health Reporting
+## 6. Standardized Scraper Health & Telemetry Reporting
 
-Currently, when a scraper catches an error, it prints a message to stdout and returns `[]`. The telemetry table displays `⚪ Checked (0 new)`. This hides network failures and rate limits.
+HTTP 200 alone does not prove that extraction succeeded. A scraper receiving HTTP 200 may have encountered a Cloudflare challenge, an empty JSON payload, or broken DOM selectors.
 
-### Proposed Five-State Health Status for Scrapers:
+### Standardized Scraper Health Status Vocabulary:
 
-```text
-                                [Scraper Execution]
-                                         │
-                 ┌───────────────────────┼───────────────────────┐
-                 ▼                       ▼                       ▼
-           [HTTP 200 OK]           [HTTP 4xx/5xx]          [Network Timeout/
-                 │                  or Cloudflare              Exception]
-        ┌────────┴────────┐              │                       │
-        ▼                 ▼              ▼                       ▼
- [Records Parsed]   [Zero Records]  FAILED_HTTP_ERROR     FAILED_EXCEPTION
-        │                 │        (e.g. 429 Rate Limit) (e.g. ConnectionReset)
-        ▼                 ▼
-SUCCESS_EXTRACTED   EMPTY_SUCCESS
+```python
+health_status = {
+    "SUCCESS_EXTRACTED": 0,    # HTTP 200, valid structure, >= 1 job extracted
+    "EMPTY_SUCCESS": 0,        # HTTP 200, valid structure, verified 0 matching listings
+    "FAILED_HTTP_ERROR": 0,    # HTTP 4xx/5xx (e.g. 429 rate limit, 403 forbidden)
+    "FAILED_PARSE_ERROR": 0,   # HTTP 200, but payload unexpected, malformed, or challenge page
+    "FAILED_TIMEOUT": 0,       # Network timeout or socket connection drop
+    "FAILED_EXCEPTION": 0      # Unhandled Python runtime exception
+}
 ```
 
-* Every scraper function will return a tuple: `(jobs_list: list, status_report: dict)`.
-* `status_report` structure:
-  ```python
-  {
-      "source_name": "LinkedIn Direct",
-      "status": "SUCCESS" | "EMPTY" | "FAILED_HTTP" | "FAILED_PARSE" | "FAILED_TIMEOUT",
-      "http_code": 200,
-      "items_discovered": 12,
-      "items_fully_extracted": 10,
-      "items_snippet_only": 2,
-      "error_message": None
-  }
-  ```
-* **Step Summary Telemetry Upgrade:** GitHub Actions step summary will report:
-  * `🟢 Active (12 leads)`
-  * `⚪ Checked (0 new leads)`
-  * `🔴 Failed (HTTP 429 Too Many Requests)`
-  * `⚠️ Partial (Failed to parse DOM selector)`
+Every scraper function returns a tuple: `(extracted_records: list, pipeline_status: dict)`.
+
+```python
+pipeline_status = {
+    "source_name": "LinkedIn Direct",
+    "status": "SUCCESS_EXTRACTED" | "EMPTY_SUCCESS" | "FAILED_HTTP_ERROR" | "FAILED_PARSE_ERROR" | "FAILED_TIMEOUT",
+    "http_code": 200,
+    "items_discovered": 15,
+    "items_fully_extracted": 12,
+    "items_partially_extracted": 3,
+    "items_discovery_only": 0,
+    "error_message": None
+}
+```
 
 ---
 
-## 7. Source-Specific Improvement Plans (Without Adding New Sources)
+## 7. Source-Specific Implementation Plan
 
-### 1. LinkedIn Direct & BD Tech Employers (`fetch_linkedin_jobs` & `fetch_complete_bd_companies`)
-* **Current Issue:** Location is not extracted; company defaults to generic string if subtitle tag changes.
-* **Fix:**
-  * Extract location from `span.job-search-card__location`.
-  * If `h4.base-search-card__subtitle` is missing, try `a[data-tracking-control-name*='company']`.
-  * Parse remote badge if `span.job-search-card__benefits` mentions "Remote".
+### 1. We Work Remotely (SRC-03)
+* **Current Code:** `jobs.append({"company": "Remote Global Tech", "title": title, ...})`
+* **Improvement:** WWR RSS titles are structured as `Company: Title`.  
+  Parse via `parts = title.split(":", 1)`. If `len(parts) == 2`, set `company_name = parts[0].strip()` and `raw_title = parts[1].strip()`. Set `field_provenance["company_name"] = "PARSED_TITLE_PREFIX"`. Set `is_snippet_only = False`.
 
-### 2. We Work Remotely (`fetch_wwr_rss`)
-* **Current Issue:** Company is hardcoded to `"Remote Global Tech"`.
-* **Fix:**
-  * WWR titles follow the exact format: `Company Name: Job Title`.
-  * Parse using `title_raw.split(":", 1)`. Set `company_name = parts[0].strip()` and `raw_title = parts[1].strip()`.
-  * Sets quality to **Tier 2 (Official Feed)** with 100% verified company and title.
+### 2. UI/UX Jobs Board Bangladesh (SRC-05b)
+* **Current Code:** `jobs.append({"company": "UI/UX Jobs Board Employer", "title": title, ...})`
+* **Improvement:** Parse company from card subtitle or set `company_name = None`. Never hardcode an artificial company name. Set `is_snippet_only = False` and `extraction_status = "PARTIALLY_EXTRACTED"` if company is missing.
 
-### 3. UI/UX Jobs Board (`fetch_bd_and_remote_portals`)
-* **Current Issue:** Company is hardcoded to `"UI/UX Jobs Board Employer"`.
-* **Fix:**
-  * Inspect listing card DOM: company name is contained in the sibling `span` or `p` tag beneath the `<a>` job title. Extract company from DOM text rather than hardcoding.
+### 3. Remotive & Himalayas (SRC-02 & SRC-07a)
+* **Current Code:** Merges location into company name string.
+* **Improvement:** Preserve `company_name` as clean string. Populate `location_raw = item.get("candidate_required_location")`. Extract `posted_date` and `salary_raw` if present in JSON.
 
-### 4. Search Query Fallbacks (DuckDuckGo in Portals, Wellfound, Facebook, and BD Tech)
-* **Current Issue:** Snippet text is forced into the `title` field.
-* **Fix:**
-  * Explicitly flag all search query results with `is_snippet_only = True`, `raw_title = None`, and `company_name = None`.
-  * Store snippet text in `description_snippet`.
-  * Preserve link for manual verification via `needs_review.json`.
+### 4. DuckDuckGo Fallbacks (SRC-05c, SRC-06b, SRC-07b, SRC-08b)
+* **Current Code:** `jobs.append({"title": snippet.text[:140], "company": "Hiring Company", ...})`
+* **Improvement:** Set `raw_title = None`, `company_name = None`, `discovery_snippet = snippet.text[:300]`, `is_snippet_only = True`, `extraction_status = "DISCOVERY_ONLY"`.
 
 ---
 
-## 8. Proposed Extraction Test Plan (Mocked Test Suite)
+## 8. Extraction Test Plan (Mocked Unit Tests)
 
-To ensure extraction reliability before any LLM processing, the following 10 unit tests will be implemented in `tests/test_extraction.py`:
+These 10 unit tests will be implemented in `tests/test_extraction.py` using static mocked payloads:
 
-| Test ID | Target Component | Mocked Input Fixture | Expected Extraction Output Assertion |
+| Test ID | Scenario | Mock Input Fixture | Assertions & Expected Output Contract |
 | :--- | :--- | :--- | :--- |
-| **TEST-EXT-01** | `fetch_remotive_jobs` | Valid Remotive JSON API response with 2 jobs | Both records extracted with `source_quality_tier=1`, clean URLs, and `extraction_status="FULLY_EXTRACTED"`. |
-| **TEST-EXT-02** | `fetch_wwr_rss` | Valid WWR XML feed: `<title>Acme Inc: Junior Product Designer</title>` | Correctly splits company (`"Acme Inc"`) and title (`"Junior Product Designer"`). Asserts company is **not** `"Remote Global Tech"`. |
-| **TEST-EXT-03** | `fetch_linkedin_jobs` | Mock LinkedIn HTML with title, company, and location spans | Asserts `raw_title`, `company_name`, and `location_raw` are populated cleanly without DOM tags. |
-| **TEST-EXT-04** | `fetch_linkedin_jobs` | Malformed LinkedIn HTML (missing company subtitle `<h4>`) | Asserts `company_name=None`, `is_snippet_only=False`, and `"company_name" in missing_fields`. |
-| **TEST-EXT-05** | DuckDuckGo Fallback | Search result body with snippet text and target URL | Asserts `raw_title=None`, `company_name=None`, `is_snippet_only=True`, and `extraction_status="DISCOVERY_ONLY"`. |
-| **TEST-EXT-06** | `fetch_facebook_via_apify` | Apify dataset with raw user question post ("Does anyone know Figma?") | Asserts `raw_title=None`, `is_snippet_only=True`, and raw text stored in `description_snippet`. |
-| **TEST-EXT-07** | `fetch_bd_and_remote_portals` | Bdjobs API response with valid `Jobid`, `jobTitle`, and `deadline` | Asserts canonical URL constructed (`bdjobs.com/h/details/{id}`) and `deadline_raw` preserved. |
-| **TEST-EXT-08** | Any API Scraper | HTTP 429 Too Many Requests response | Asserts scraper returns `([], status_report)` where `status_report["status"] == "FAILED_HTTP"` and `http_code == 429`. |
-| **TEST-EXT-09** | Any API Scraper | Empty JSON response (`{"jobs": []}`) | Asserts scraper returns `([], status_report)` where `status_report["status"] == "EMPTY"` and `http_code == 200`. |
-| **TEST-EXT-10** | Any Scraper | Listing URL missing or malformed (e.g. `javascript:void(0)`) | Asserts record is rejected and not added to candidate list. |
+| **TEST-EXT-01** | **WWR Title & Company Split** | RSS XML item with `<title>Canva: Junior Product Designer</title>` | `company_name == "Canva"`, `raw_title == "Junior Product Designer"`, `is_snippet_only == False`, `extraction_status == "FULLY_EXTRACTED"`. |
+| **TEST-EXT-02** | **LinkedIn Missing Company** | LinkedIn HTML card with valid `<h3>` title but missing `<h4>` subtitle | `raw_title == "UI/UX Designer"`, `company_name == None`, `is_snippet_only == False`, `"company_name" in missing_fields`, `extraction_status == "PARTIALLY_EXTRACTED"`. |
+| **TEST-EXT-03** | **LinkedIn Missing Title** | LinkedIn HTML card with valid `<h4>` company but empty/missing `<h3>` title | Record is rejected as invalid (cannot identify vacancy). `len(jobs) == 0`. |
+| **TEST-EXT-04** | **DuckDuckGo Search Snippet** | HTML result body with snippet text and target URL | `raw_title == None`, `company_name == None`, `is_snippet_only == True`, `extraction_status == "DISCOVERY_ONLY"`, `discovery_snippet` contains text. |
+| **TEST-EXT-05** | **Facebook Apify Discussion** | Apify post: *"Can anyone recommend a good Figma tutorial?"* | `raw_title == None`, `company_name == None`, `is_snippet_only == True`, `extraction_status == "DISCOVERY_ONLY"`. |
+| **TEST-EXT-06** | **Facebook Hiring Post** | Apify post containing unstructured hiring text | `is_snippet_only == True`, `company_name == None`, text stored in `discovery_snippet`. |
+| **TEST-EXT-07** | **Scraper HTTP 429 Error** | Mock requests.Session returning HTTP 429 | Returns `([], status)`. `status["status"] == "FAILED_HTTP_ERROR"`, `status["http_code"] == 429`. |
+| **TEST-EXT-08** | **HTTP 200 Bot Challenge** | Mock HTTP 200 returning Cloudflare challenge HTML | Returns `([], status)`. `status["status"] == "FAILED_PARSE_ERROR"` (does not report `EMPTY_SUCCESS`). |
+| **TEST-EXT-09** | **Missing Optional Fields** | Remotive API response with valid title, company, URL, but missing salary and deadline | `extraction_status == "FULLY_EXTRACTED"`, `salary_raw == None`, `deadline_raw == None`, missing optional fields do **not** downgrade status. |
+| **TEST-EXT-10** | **Source URL vs. Job URL** | DuckDuckGo search result linking to external job URL | `source_url` starts with `https://html.duckduckgo.com`, `job_url` contains destination URL. |
 
 ---
 
-## 9. Recommended Implementation Sequence for Step 3
+## 9. Implementation Sequence for Step 3
 
-When approved, Step 3 implementation should proceed in four isolated phases:
+Implementation will be executed in four disciplined, test-verified phases:
 
-1. **Phase 3A (Data Contract):** Define `JobRecord` dictionary builder function with strict field typing and `is_snippet_only` flagging.
-2. **Phase 3B (API & Feed Cleanup):** Update Tier 1 & 2 scrapers (Remotive, RemoteOK, Bdjobs, WWR RSS parser) to parse real company names and populate all available metadata.
-3. **Phase 3C (Snippet Sanitization):** Refactor DuckDuckGo fallbacks to set `raw_title = None`, `company_name = None`, and `is_snippet_only = True`.
-4. **Phase 3D (Extraction Unit Tests):** Implement `tests/test_extraction.py` covering all 10 mocked test fixtures and verify 100% pass rate.
-
----
-
-## 10. Risks & Open Questions for User Approval
-
-1. **Volume of "Needs Review" Leads:**
-   * By properly marking search engine snippets as `is_snippet_only: true`, fewer jobs will qualify for the primary digest, and more will route to `needs_review.json`.  
-   * *Assessment:* This strictly improves accuracy and eliminates garbage notifications, but total "Core Match" count may drop on days when direct APIs have low volume.
-2. **Facebook Post Extraction Strategy:**
-   * Apify retrieves raw text posts from Facebook groups. Some are real hiring posts; many are discussions.
-   * *Proposed Rule:* If a post does not contain clear hiring intent keywords (`"hiring"`, `"looking for"`, `"intern"`, `"vacancy"`), it is dropped before reaching the candidate list.
+* **Phase 3A — Extraction Contract Builder:** Implement `build_normalized_record()` helper with strict field typing and validation.
+* **Phase 3B — Structured API & RSS Feed Refinement:** Refactor Remotive, RemoteOK, Bdjobs, and WWR RSS parser to extract real company names and field provenance.
+* **Phase 3C — Snippet & Social Sanitization:** Refactor the 4 DuckDuckGo fallbacks and Apify scraper to eliminate title pollution and set `is_snippet_only = True`.
+* **Phase 3D — Extraction Test Suite:** Implement `tests/test_extraction.py` with all 10 mocked test fixtures and verify 100% pass rate.
 
 ---
-*End of Data Extraction Reliability Audit & Implementation Plan (Step 3).*
+
+## 10. Final Verification & Constraints Check
+
+* **Zero code modifications:** `jobfinder/jobfather.py`, prompts, tests, and dependencies remain completely untouched.
+* **Authority preserved:** `CANDIDATE_PROFILE_SPEC.md` remains the sole governing authority for classification decisions.
+
+---
+*End of Refined Extraction Reliability Plan (Step 3.1).*
