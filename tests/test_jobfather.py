@@ -78,6 +78,24 @@ class TestJobFather(unittest.TestCase):
         self.assertEqual(loaded["https://example.com/notified_job"], "2026-11-20T08:30:00Z|notified")
         self.assertEqual(loaded["https://example.com/filtered_job"], "2026-11-20T08:30:00Z|filtered")
 
+    def test_validate_environment(self):
+        """Verify environment validator detects missing vs complete secrets."""
+        orig_tel = jf.TELEGRAM_BOT_TOKEN
+        orig_chat = jf.TELEGRAM_CHAT_ID
+        orig_gem = jf.GEMINI_API_KEY
+        try:
+            jf.TELEGRAM_BOT_TOKEN = None
+            self.assertFalse(jf.validate_environment())
+
+            jf.TELEGRAM_BOT_TOKEN = "tok"
+            jf.TELEGRAM_CHAT_ID = "chat"
+            jf.GEMINI_API_KEY = "gem"
+            self.assertTrue(jf.validate_environment())
+        finally:
+            jf.TELEGRAM_BOT_TOKEN = orig_tel
+            jf.TELEGRAM_CHAT_ID = orig_chat
+            jf.GEMINI_API_KEY = orig_gem
+
     # --- 2. TELEGRAM NOTIFICATION TESTS ---
     @patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""})
     def test_send_telegram_missing_credentials(self):

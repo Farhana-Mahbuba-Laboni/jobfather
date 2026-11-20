@@ -38,16 +38,38 @@ def load_seen_jobs():
     return {}
 
 def save_seen_jobs(seen_dict):
-    """Prunes database to the most recent 1000 items while strictly preserving chronological order."""
+    """Prunes database to the most recent 1000 items while preserving chronological order.
+    Uses atomic file replacement to prevent database corruption if process is interrupted."""
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
         # Ensure any temporary marker gets a valid ISO timestamp
         normalized = {k: (v if v != "in_run" and isinstance(v, str) else now_iso) for k, v in seen_dict.items()}
         sorted_items = sorted(normalized.items(), key=lambda x: str(x[1]))[-1000:]
-        with open(DB_FILE, "w") as f:
+        
+        tmp_file = f"{DB_FILE}.tmp"
+        with open(tmp_file, "w") as f:
             json.dump(dict(sorted_items), f, indent=2)
+        os.replace(tmp_file, DB_FILE)
     except Exception as e:
         print(f"Notice saving seen database: {e}")
+
+def validate_environment():
+    """Validates core API credentials early before initiating network pipelines."""
+    missing = []
+    if not TELEGRAM_BOT_TOKEN:
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not TELEGRAM_CHAT_ID:
+        missing.append("TELEGRAM_CHAT_ID")
+    if not GEMINI_API_KEY:
+        missing.append("GEMINI_API_KEY")
+    
+    if missing:
+        print(f"❌ CRITICAL CONFIGURATION ERROR: Missing required secret(s): {', '.join(missing)}")
+        return False
+    
+    if not APIFY_TOKEN:
+        print("ℹ️ Configuration note: APIFY_TOKEN is unset. Facebook scraping will rely on stealth search fallback.")
+    return True
 
 def send_telegram_message(message_text):
     """Sends formatted message(s) to Telegram, splitting automatically if over Telegram's 4096-char limit.
@@ -554,6 +576,9 @@ def fetch_complete_bd_companies(session, seen_urls):
 
 # --- AI ANALYSIS & TELEGRAM DIGEST ---
 def filter_with_ai_and_notify():
+    if not validate_environment():
+        return
+
     seen_urls = load_seen_jobs()
     print(f"📚 Memory database loaded: {len(seen_urls)} previous jobs tracked (chronological ledger).")
 
