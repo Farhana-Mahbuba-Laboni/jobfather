@@ -581,9 +581,13 @@ def filter_with_ai_and_notify():
     YOUR FILTERING GOAL:
     1. Filter strictly for these 13 target UX/Product Design disciplines:
        - UX Designer, UI/UX Designer, Product Designer, UX Researcher, Interaction Designer, Information Architect, UX Strategist, Service Designer, Accessibility Specialist, AI UX Designer, AI Agent Designer, Design Engineer (UX Engineer), Design System Specialist.
-    2. Discard obvious Graphic Design / social media banner / flyer jobs.
-    3. Look for roles welcoming beginners (Intern, Trainee, Junior, 0-1 year, or freshers). If strict 0-year roles are scarce, include the best junior/entry roles (0-2 years, negotiable, or intern) as 'Recommended Matches' so the candidate has active leads.
-    4. ACCURATE BUSINESS INDUSTRY CLASSIFICATION:
+    2. STRICT SENIORITY BAN:
+       - Instantly REJECT and discard any role containing 'Senior', 'Sr.', 'Lead', 'Principal', 'Staff', 'Director', 'Head of', 'Manager', or 'VP' in the title.
+       - Strictly keep only Intern, Trainee, Junior, Associate, Entry-level, or unranked designer roles (0-2 years experience).
+    3. Discard obvious Graphic Design / social media banner / flyer jobs.
+    4. CROSS-PLATFORM DEDUPLICATION:
+       - If the exact same job position at the same company appears across multiple sources, output it ONLY ONCE using the best direct link.
+    5. ACCURATE BUSINESS INDUSTRY CLASSIFICATION:
        - Identify the hiring company's actual business domain (e.g. FinTech, Telecom & Super-Apps, Enterprise SaaS, HealthTech, EdTech, E-Commerce & Logistics, Software Exporter / Offshore IT, AI & Autonomous Tech, Digital Product Studio / Agency).
        - CRUCIAL: NEVER use the job portal or scraping medium (like Bdjobs, LinkedIn, Careerjet, RemoteRocketship, UI/UX Jobs Board, JobTogether, or Facebook) as the Industry! The job board is just the medium and belongs under '🌐 Source'.
 
