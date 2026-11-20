@@ -49,6 +49,10 @@ def save_seen_jobs(seen_dict):
 
 def send_telegram_message(message_text):
     """Sends formatted message(s) to Telegram, splitting automatically if over Telegram's 4096-char limit."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("❌ CRITICAL: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing from environment/secrets!")
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
     chunks = []
@@ -65,7 +69,7 @@ def send_telegram_message(message_text):
         if current_chunk:
             chunks.append(current_chunk)
 
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks):
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": chunk,
@@ -73,12 +77,18 @@ def send_telegram_message(message_text):
             "disable_web_page_preview": False
         }
         try:
-            res = requests.post(url, json=payload, timeout=10)
+            res = requests.post(url, json=payload, timeout=15)
+            print(f"📡 Telegram chunk {i+1}/{len(chunks)} status: {res.status_code}")
             if res.status_code != 200:
+                print(f"⚠️ Telegram markdown rejected: {res.text}. Retrying with plain text...")
                 payload.pop("parse_mode", None)
-                requests.post(url, json=payload, timeout=10)
+                res2 = requests.post(url, json=payload, timeout=15)
+                print(f"📡 Telegram plain-text retry status: {res2.status_code}")
+                if res2.status_code != 200:
+                    print(f"❌ Telegram retry failed: {res2.text}")
+            time.sleep(1.5)  # Prevent Telegram 429 rate limit between chunks
         except Exception as e:
-            print(f"Error sending message to Telegram: {e}")
+            print(f"❌ Error sending message to Telegram: {e}")
 
 # --- 1. LINKEDIN DIRECT SCRAPER ---
 def fetch_linkedin_jobs(session, seen_urls):
