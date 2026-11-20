@@ -774,8 +774,11 @@ def filter_with_ai_and_notify():
                     notified_count += 1
                 else:
                     filtered_count += 1
-        save_seen_jobs(seen_urls)
-        print(f"💾 Memory updated: {notified_count} accepted & notified, {filtered_count} filtered ({len(seen_urls)} total in chronological ledger).")
+        saved = save_seen_jobs(seen_urls)
+        if saved:
+            print(f"💾 Memory updated: {notified_count} accepted & notified, {filtered_count} filtered ({len(seen_urls)} total in chronological ledger).")
+        else:
+            print("⚠️ Warning: Database persistence encountered an error during atomic write.")
     else:
         print("⚠️ Telegram delivery failed or was incomplete. Seen memory preserved so jobs can be redelivered on next run.")
 
