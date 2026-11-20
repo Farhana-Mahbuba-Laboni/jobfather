@@ -63,18 +63,25 @@ def send_telegram_message(message_text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
     chunks = []
-    if len(message_text) <= 3900:
-        chunks = [message_text]
-    else:
-        current_chunk = ""
-        for line in message_text.split("\n"):
-            if len(current_chunk) + len(line) + 1 > 3900:
-                chunks.append(current_chunk)
-                current_chunk = line + "\n"
-            else:
-                current_chunk += line + "\n"
-        if current_chunk:
-            chunks.append(current_chunk)
+    current_chunk = ""
+    for raw_line in message_text.split("\n"):
+        # Split exceptionally long individual lines exceeding 3800 chars without newlines
+        line = raw_line
+        while len(line) > 3800:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = ""
+            chunks.append(line[:3800])
+            line = line[3800:]
+
+        if len(current_chunk) + len(line) + 1 > 3800:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
 
     if not chunks:
         return False
@@ -656,7 +663,13 @@ def filter_with_ai_and_notify():
     from google import genai
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    models_to_try = [
+        "gemini-2.5-flash",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
+    ]
     response = None
 
     for model_name in models_to_try:

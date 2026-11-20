@@ -1,9 +1,13 @@
 import os
+import sys
 import json
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
+
+# Ensure project root is in sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Import functions to test
 import jobfinder.jobfather as jf
@@ -130,6 +134,27 @@ class TestJobFather(unittest.TestCase):
 
         result = jf.send_telegram_message("Message")
         self.assertFalse(result)
+
+    @patch("requests.post")
+    def test_send_telegram_splits_unusually_long_unbroken_lines(self, mock_post):
+        """Verify that a single unbroken line exceeding 3800 chars is safely sliced and delivered."""
+        jf.TELEGRAM_BOT_TOKEN = "mock_token"
+        jf.TELEGRAM_CHAT_ID = "mock_chat"
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": True}
+        mock_post.return_value = mock_resp
+
+        # Create 8500 character unbroken string
+        huge_line = "A" * 8500
+        result = jf.send_telegram_message(huge_line)
+        self.assertTrue(result)
+        # Should have split into at least 3 chunks
+        self.assertGreaterEqual(mock_post.call_count, 3)
+        for call_args in mock_post.call_args_list:
+            sent_text = call_args[1]["json"]["text"]
+            self.assertLessEqual(len(sent_text), 3800)
 
     # --- 3. IN-RUN DEDUPLICATION TEST ---
     def test_in_run_deduplication(self):
