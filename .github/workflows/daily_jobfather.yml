@@ -6,6 +6,10 @@ on:
     - cron: '30 2 * * *'
   workflow_dispatch: # Allows manual one-click trigger anytime from GitHub
 
+concurrency:
+  group: jobfather-daily
+  cancel-in-progress: false
+
 jobs:
   run-jobfather:
     runs-on: ubuntu-latest

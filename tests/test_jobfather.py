@@ -78,8 +78,8 @@ class TestJobFather(unittest.TestCase):
         self.assertEqual(loaded["https://example.com/notified_job"], "2026-11-20T08:30:00Z|notified")
         self.assertEqual(loaded["https://example.com/filtered_job"], "2026-11-20T08:30:00Z|filtered")
 
-    def test_atomic_database_write_safety(self):
-        """Verify atomic replacement leaves existing database uncorrupted if write fails."""
+    def test_atomic_database_write_safety_and_cleanup(self):
+        """Verify atomic replacement leaves existing database intact and cleans up tmpfile on failure."""
         # Seed initial database
         initial_data = {"https://example.com/stable": "2026-11-20T08:00:00Z"}
         jf.save_seen_jobs(initial_data)
@@ -95,33 +95,40 @@ class TestJobFather(unittest.TestCase):
         reloaded = jf.load_seen_jobs()
         self.assertEqual(reloaded, initial_data)
 
-    def test_job_lifecycle_multi_attribute_classification(self):
-        """Verify job lifecycle correctly tags |notified vs |filtered using URL and Title+Company."""
-        candidates = [
-            {"title": "Junior UX Designer", "company": "Alpha Tech", "link": "https://example.com/job1"},
-            {"title": "Product Design Intern", "company": "Beta Studio", "link": "https://example.com/job2"},
-            {"title": "Senior Director of UX", "company": "Gamma Corp", "link": "https://example.com/job3"}
-        ]
-        # Simulate AI output accepting job1 (by URL) and job2 (by title/company) while rejecting job3
-        simulated_ai_digest = (
-            "📌 Junior UX Designer - Alpha Tech\nLink: https://example.com/job1\n\n"
-            "📌 Product Design Intern - Beta Studio\nLink: View on Company Portal"
-        )
-        now_iso = "2026-11-20T08:30:00Z"
-        seen_urls = {}
-        for item in candidates:
-            link = item.get("link")
-            title = item.get("title", "").strip().lower()
-            comp = item.get("company", "").strip().lower()
-            is_notified = (link in simulated_ai_digest) or (bool(title and comp and title in simulated_ai_digest.lower() and comp in simulated_ai_digest.lower()))
-            if is_notified:
-                seen_urls[link] = f"{now_iso}|notified"
-            else:
-                seen_urls[link] = f"{now_iso}|filtered"
+        # Ensure no leftover temporary files in DB directory
+        db_dir = os.path.dirname(jf.DB_FILE) or "."
+        tmp_files = [f for f in os.listdir(db_dir) if f.startswith("seen_jobs_") and f.endswith(".tmp")]
+        self.assertEqual(len(tmp_files), 0)
 
-        self.assertEqual(seen_urls["https://example.com/job1"], f"{now_iso}|notified")
-        self.assertEqual(seen_urls["https://example.com/job2"], f"{now_iso}|notified")
-        self.assertEqual(seen_urls["https://example.com/job3"], f"{now_iso}|filtered")
+    def test_classify_job_production_function(self):
+        """Directly tests production jf.classify_job() against cards and prevents cross-card false matches."""
+        # Multi-card digest
+        digest = (
+            "📌 Junior UX Designer - Alpha Tech\n"
+            "• Type: Full-time\n"
+            "• Link: https://example.com/direct_link\n\n"
+            "📌 Product Designer - Beta Solutions\n"
+            "• Type: Remote\n"
+            "• Link: View on Company Site\n"
+        )
+
+        # 1. Matches direct URL
+        item_url = {"title": "Designer", "company": "Any", "link": "https://example.com/direct_link"}
+        self.assertEqual(jf.classify_job(item_url, digest), "notified")
+
+        # 2. Matches Title + Company co-occurring in the SAME card
+        item_same_card = {"title": "Product Designer", "company": "Beta Solutions", "link": "https://example.com/other"}
+        self.assertEqual(jf.classify_job(item_same_card, digest), "notified")
+
+        # 3. Cross-card false match prevention:
+        # Title "Junior UX Designer" is in Card 1, but Company "Beta Solutions" is in Card 2.
+        # Must NOT be classified as notified!
+        item_cross_card = {"title": "Junior UX Designer", "company": "Beta Solutions", "link": "https://example.com/unmatched"}
+        self.assertEqual(jf.classify_job(item_cross_card, digest), "filtered")
+
+        # 4. Out-of-scope role rejected
+        item_rejected = {"title": "Principal Architect", "company": "Gamma Corp", "link": "https://example.com/gamma"}
+        self.assertEqual(jf.classify_job(item_rejected, digest), "filtered")
 
     def test_validate_environment(self):
         """Verify environment validator detects missing vs complete secrets."""

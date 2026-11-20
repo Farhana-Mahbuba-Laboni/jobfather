@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import tempfile
 from datetime import datetime, timezone
 import requests
 import xml.etree.ElementTree as ET
@@ -39,19 +40,48 @@ def load_seen_jobs():
 
 def save_seen_jobs(seen_dict):
     """Prunes database to the most recent 1000 items while preserving chronological order.
-    Uses atomic file replacement to prevent database corruption if process is interrupted."""
+    Uses unique atomic tempfile replacement and cleans up on failure."""
+    tmp_path = None
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
         # Ensure any temporary marker gets a valid ISO timestamp
         normalized = {k: (v if v != "in_run" and isinstance(v, str) else now_iso) for k, v in seen_dict.items()}
         sorted_items = sorted(normalized.items(), key=lambda x: str(x[1]))[-1000:]
         
-        tmp_file = f"{DB_FILE}.tmp"
-        with open(tmp_file, "w") as f:
-            json.dump(dict(sorted_items), f, indent=2)
-        os.replace(tmp_file, DB_FILE)
+        db_dir = os.path.dirname(DB_FILE) or "."
+        with tempfile.NamedTemporaryFile("w", dir=db_dir, prefix="seen_jobs_", suffix=".tmp", delete=False) as tf:
+            json.dump(dict(sorted_items), tf, indent=2)
+            tmp_path = tf.name
+
+        os.replace(tmp_path, DB_FILE)
     except Exception as e:
         print(f"Notice saving seen database: {e}")
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+def classify_job(item, digest_text):
+    """Accurately classifies whether a candidate job was included in the notified digest.
+    Matches either direct link OR co-occurrence of Title and Company within the SAME individual job card."""
+    link = item.get("link", "").strip()
+    if link and link in digest_text:
+        return "notified"
+
+    title = item.get("title", "").strip().lower()
+    company = item.get("company", "").strip().lower()
+    if not title or not company:
+        return "filtered"
+
+    # Split digest into individual job cards to ensure title and company co-occur in the same card
+    cards = digest_text.split("📌")
+    for card in cards:
+        card_lower = card.lower()
+        if title in card_lower and company in card_lower:
+            return "notified"
+
+    return "filtered"
 
 def validate_environment():
     """Validates core API credentials early before initiating network pipelines."""
@@ -736,16 +766,11 @@ def filter_with_ai_and_notify():
         for item in combined_data:
             link = item.get("link")
             if link:
-                # Multi-attribute classification: checks direct URL or Title + Company match
-                title = item.get("title", "").strip().lower()
-                comp = item.get("company", "").strip().lower()
-                is_notified = (link in ai_text) or (bool(title and comp and title in ai_text.lower() and comp in ai_text.lower()))
-                
-                if is_notified:
-                    seen_urls[link] = f"{now_iso}|notified"
+                status = classify_job(item, ai_text)
+                seen_urls[link] = f"{now_iso}|{status}"
+                if status == "notified":
                     notified_count += 1
                 else:
-                    seen_urls[link] = f"{now_iso}|filtered"
                     filtered_count += 1
         save_seen_jobs(seen_urls)
         print(f"💾 Memory updated: {notified_count} accepted & notified, {filtered_count} filtered ({len(seen_urls)} total in chronological ledger).")
