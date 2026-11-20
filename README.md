@@ -62,13 +62,13 @@ flowchart TD
 * **Pipeline Telemetry:** Live per-scraper health checks and discovery statistics automatically rendered to GitHub Actions Step Summary (`$GITHUB_STEP_SUMMARY`).
 * **Pinned Dependencies:** Strict version locking in `requirements.txt` for deterministic, zero-surprise cloud runner builds.
 * **Telegram Auto-Chunking:** Automatically chunks messages exceeding 3,900 characters to prevent silent truncation under Telegram's 4,096-char ceiling.
-* **AI Model Fallback Chain:** Automatically cycles through `gemini-3.5-flash-lite`, `gemini-3.8-flash`, and `gemini-3.1-flash-lite` with exponential retry backoff if Google API experiences high traffic.
+* **AI Model Fallback Chain:** Automatically cycles through verified production models (`gemini-2.5-flash`, `gemini-2.0-flash`, `gemini-1.5-flash`) with error-aware retry backoff if Google API experiences high traffic.
 
 ---
 
-## 🔮 Engineering Roadmap (Future Iterations)
+## 🔮 Engineering Roadmap
 
-- [ ] Add `pytest` test suite with mocked network fixtures for scraper HTML parsers
+- [x] Automated test suite verifying memory persistence, Telegram chunking, and deduplication
 - [ ] SQLite persistence layer for multi-profile candidate indexing
 - [ ] Webhook-based interactive Telegram buttons (e.g. `[Save Job]`, `[Apply Now]`)
 

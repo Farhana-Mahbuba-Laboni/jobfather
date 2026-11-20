@@ -51,9 +51,13 @@ def save_seen_jobs(seen_dict):
 
 def send_telegram_message(message_text):
     """Sends formatted message(s) to Telegram, splitting automatically if over Telegram's 4096-char limit.
-    Returns True only if all chunks are successfully delivered."""
+    Returns True only if all chunks are successfully delivered and confirmed by Telegram API."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ CRITICAL: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing from environment/secrets!")
+        return False
+
+    if not message_text or not str(message_text).strip():
+        print("Notice: Empty message text provided to send_telegram_message.")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -72,6 +76,9 @@ def send_telegram_message(message_text):
         if current_chunk:
             chunks.append(current_chunk)
 
+    if not chunks:
+        return False
+
     all_delivered = True
     for i, chunk in enumerate(chunks):
         payload = {
@@ -84,14 +91,23 @@ def send_telegram_message(message_text):
         try:
             res = requests.post(url, json=payload, timeout=15)
             print(f"📡 Telegram chunk {i+1}/{len(chunks)} status: {res.status_code}")
-            if res.status_code == 200:
+            try:
+                res_json = res.json()
+            except Exception:
+                res_json = {}
+
+            if res.status_code == 200 and res_json.get("ok") is True:
                 chunk_success = True
             else:
                 print(f"⚠️ Telegram markdown rejected: {res.text}. Retrying with plain text...")
                 payload.pop("parse_mode", None)
                 res2 = requests.post(url, json=payload, timeout=15)
                 print(f"📡 Telegram plain-text retry status: {res2.status_code}")
-                if res2.status_code == 200:
+                try:
+                    res2_json = res2.json()
+                except Exception:
+                    res2_json = {}
+                if res2.status_code == 200 and res2_json.get("ok") is True:
                     chunk_success = True
                 else:
                     print(f"❌ Telegram retry failed: {res2.text}")
@@ -640,7 +656,7 @@ def filter_with_ai_and_notify():
     from google import genai
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    models_to_try = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.1-flash-lite"]
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
     response = None
 
     for model_name in models_to_try:
@@ -655,7 +671,11 @@ def filter_with_ai_and_notify():
                     print(f"✅ AI analysis complete using {model_name}!")
                     break
             except Exception as e:
+                err_msg = str(e).lower()
                 print(f"Notice ({model_name}, attempt {attempt+1}): {e}")
+                # Skip retrying if model is not found, unauthorized, or bad request
+                if "not found" in err_msg or "unauthorized" in err_msg or "invalid" in err_msg:
+                    break
                 time.sleep(2)
         if response and response.text:
             break

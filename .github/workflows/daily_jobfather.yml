@@ -24,6 +24,10 @@ jobs:
         run: |
           pip install -r jobfinder/requirements.txt
 
+      - name: Run Unit Tests
+        run: |
+          python -m unittest discover tests
+
       - name: Run JobFather Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
