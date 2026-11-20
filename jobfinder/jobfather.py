@@ -103,6 +103,319 @@ def validate_environment():
         print("ℹ️ Configuration note: APIFY_TOKEN is unset. Facebook scraping will rely on stealth search fallback.")
     return True
 
+# --- NORMALIZED EXTRACTION CONTRACT & BUILDER (Step 3 Phase 3A) ---
+
+VALID_SOURCE_TYPES = {
+    "STRUCTURED_API",
+    "STRUCTURED_FEED",
+    "DIRECT_PAGE_SCRAPE",
+    "COMMUNITY_POST",
+    "SEARCH_SNIPPET",
+}
+
+VALID_REMOTE_TYPES = {
+    "ON_SITE",
+    "HYBRID",
+    "REMOTE_WORLDWIDE",
+    "REMOTE_REGIONAL",
+    "UNKNOWN",
+}
+
+VALID_EMPLOYMENT_TYPES = {
+    "FULL_TIME",
+    "INTERNSHIP",
+    "TRAINEE",
+    "CONTRACT",
+    "UNKNOWN",
+}
+
+VALID_EXTRACTION_STATUSES = {
+    "FULLY_EXTRACTED",
+    "PARTIALLY_EXTRACTED",
+    "DISCOVERY_ONLY",
+}
+
+VALID_PROVENANCE_TAGS = {
+    "API_FIELD",
+    "RSS_TAG",
+    "DOM_SELECTOR",
+    "PARSED_TITLE_PREFIX",
+    "COMMUNITY_POST",
+    "SEARCH_SNIPPET",
+    "NOT_PROVIDED",
+}
+
+TRACKED_NULLABLE_FIELDS = [
+    "raw_title",
+    "company_name",
+    "location_raw",
+    "experience_raw",
+    "salary_raw",
+    "posted_date",
+    "deadline_raw",
+    "job_url",
+]
+
+VALID_PROVENANCE_FIELDS = set(TRACKED_NULLABLE_FIELDS) | {"description_excerpt", "discovery_snippet"}
+
+OPTIONAL_STRING_FIELDS = [
+    "job_url",
+    "raw_title",
+    "company_name",
+    "location_raw",
+    "experience_raw",
+    "salary_raw",
+    "posted_date",
+    "deadline_raw",
+    "description_excerpt",
+    "discovery_snippet",
+]
+
+def build_normalized_record(
+    *,
+    run_candidate_id: str,
+    source_name: str,
+    source_type: str,
+    ingestion_tier: int,
+    source_url: str,
+    job_url: str = None,
+    raw_title: str = None,
+    company_name: str = None,
+    location_raw: str = None,
+    remote_type: str = "UNKNOWN",
+    experience_raw: str = None,
+    employment_type: str = "UNKNOWN",
+    salary_raw: str = None,
+    posted_date: str = None,
+    deadline_raw: str = None,
+    description_excerpt: str = "",
+    discovery_snippet: str = "",
+    is_snippet_only: bool = False,
+    is_discovery_only: bool = False,
+    extraction_status: str = None,
+    field_provenance: dict = None,
+) -> dict:
+    """Builds and validates a normalized job extraction record adhering strictly to the
+    approved contract in EXTRACTION_RELIABILITY_PLAN.md v1.3.
+
+    Enforces:
+      - Strict type validation on mandatory and optional fields.
+      - Source type to flag relationships.
+      - Decoupling of search snippets vs. discovery leads vs. direct listings.
+      - Preservation of None for genuinely unavailable optional fields (no dummy placeholders).
+      - Separation of source_url (discovery origin) and job_url (target vacancy destination).
+      - Allowing job_url = None for unparsed discovery leads (e.g. Facebook community posts).
+      - Correct extraction completeness (distinguishing essential fields from optional fields).
+      - Consistent provenance validation across all declared fields in VALID_PROVENANCE_FIELDS.
+      - Prevention of contradictory extraction statuses.
+    """
+    # 1. Mandatory Identity & Origin Validation
+    if not isinstance(run_candidate_id, str):
+        raise TypeError(f"'run_candidate_id' must be a string, got {type(run_candidate_id).__name__}.")
+    if not run_candidate_id.strip():
+        raise ValueError("'run_candidate_id' must be a non-empty string.")
+
+    if not isinstance(source_name, str):
+        raise TypeError(f"'source_name' must be a string, got {type(source_name).__name__}.")
+    if not source_name.strip():
+        raise ValueError("'source_name' must be a non-empty string.")
+
+    if not isinstance(source_url, str):
+        raise TypeError(f"'source_url' must be a string, got {type(source_url).__name__}.")
+    if not source_url.strip():
+        raise ValueError("'source_url' must be a non-empty string preserving the discovery origin URL.")
+
+    if not isinstance(source_type, str):
+        raise TypeError(f"'source_type' must be a string, got {type(source_type).__name__}.")
+    if source_type not in VALID_SOURCE_TYPES:
+        raise ValueError(f"Invalid source_type '{source_type}'. Must be one of: {sorted(VALID_SOURCE_TYPES)}")
+
+    if isinstance(ingestion_tier, bool) or not isinstance(ingestion_tier, int):
+        raise TypeError(f"'ingestion_tier' must be an integer, got {type(ingestion_tier).__name__}.")
+    if not (1 <= ingestion_tier <= 5):
+        raise ValueError(f"ingestion_tier must be between 1 and 5. Got: {ingestion_tier}")
+
+    # 2. Strict Type Validation on Optional String Fields
+    raw_opt_fields = {
+        "job_url": job_url,
+        "raw_title": raw_title,
+        "company_name": company_name,
+        "location_raw": location_raw,
+        "experience_raw": experience_raw,
+        "salary_raw": salary_raw,
+        "posted_date": posted_date,
+        "deadline_raw": deadline_raw,
+        "description_excerpt": description_excerpt,
+        "discovery_snippet": discovery_snippet,
+    }
+    for field_name, field_val in raw_opt_fields.items():
+        if field_val is not None and not isinstance(field_val, str):
+            raise TypeError(f"'{field_name}' must be a string or None, got {type(field_val).__name__}.")
+
+    # 3. String Sanitization (strip whitespace, normalize empty strings to None, except excerpts to "")
+    clean_job_url = job_url.strip() if job_url and job_url.strip() else None
+    clean_raw_title = raw_title.strip() if raw_title and raw_title.strip() else None
+    clean_company_name = company_name.strip() if company_name and company_name.strip() else None
+    clean_location_raw = location_raw.strip() if location_raw and location_raw.strip() else None
+    clean_experience_raw = experience_raw.strip() if experience_raw and experience_raw.strip() else None
+    clean_salary_raw = salary_raw.strip() if salary_raw and salary_raw.strip() else None
+    clean_posted_date = posted_date.strip() if posted_date and posted_date.strip() else None
+    clean_deadline_raw = deadline_raw.strip() if deadline_raw and deadline_raw.strip() else None
+
+    clean_desc = (description_excerpt.strip() if description_excerpt else "")[:500]
+    clean_snippet = (discovery_snippet.strip() if discovery_snippet else "")[:500]
+
+    # 4. Enum Field Validations
+    if not isinstance(remote_type, str):
+        raise TypeError(f"'remote_type' must be a string, got {type(remote_type).__name__}.")
+    if remote_type not in VALID_REMOTE_TYPES:
+        raise ValueError(f"Invalid remote_type '{remote_type}'. Must be one of: {sorted(VALID_REMOTE_TYPES)}")
+
+    if not isinstance(employment_type, str):
+        raise TypeError(f"'employment_type' must be a string, got {type(employment_type).__name__}.")
+    if employment_type not in VALID_EMPLOYMENT_TYPES:
+        raise ValueError(f"Invalid employment_type '{employment_type}'. Must be one of: {sorted(VALID_EMPLOYMENT_TYPES)}")
+
+    if extraction_status is not None:
+        if not isinstance(extraction_status, str):
+            raise TypeError(f"'extraction_status' must be a string or None, got {type(extraction_status).__name__}.")
+        if extraction_status not in VALID_EXTRACTION_STATUSES:
+            raise ValueError(f"Invalid extraction_status '{extraction_status}'. Must be one of: {sorted(VALID_EXTRACTION_STATUSES)}")
+
+    # 5. Boolean Flags & Source-Type Relationship Enforcement
+    if not isinstance(is_snippet_only, bool):
+        raise TypeError(f"'is_snippet_only' must be a boolean, got {type(is_snippet_only).__name__}.")
+    if not isinstance(is_discovery_only, bool):
+        raise TypeError(f"'is_discovery_only' must be a boolean, got {type(is_discovery_only).__name__}.")
+
+    if source_type == "SEARCH_SNIPPET":
+        if not is_snippet_only or not is_discovery_only:
+            raise ValueError("source_type 'SEARCH_SNIPPET' requires is_snippet_only=True and is_discovery_only=True.")
+        if extraction_status is not None and extraction_status != "DISCOVERY_ONLY":
+            raise ValueError("source_type 'SEARCH_SNIPPET' requires extraction_status='DISCOVERY_ONLY'.")
+        resolved_status = "DISCOVERY_ONLY"
+
+    elif source_type == "COMMUNITY_POST":
+        if is_snippet_only:
+            raise ValueError("source_type 'COMMUNITY_POST' requires is_snippet_only=False (community posts are not search snippets).")
+        if not is_discovery_only:
+            raise ValueError("source_type 'COMMUNITY_POST' requires is_discovery_only=True.")
+        if extraction_status is not None and extraction_status != "DISCOVERY_ONLY":
+            raise ValueError("source_type 'COMMUNITY_POST' requires extraction_status='DISCOVERY_ONLY'.")
+        resolved_status = "DISCOVERY_ONLY"
+
+    elif source_type in {"STRUCTURED_API", "STRUCTURED_FEED", "DIRECT_PAGE_SCRAPE"}:
+        if is_snippet_only:
+            raise ValueError(f"source_type '{source_type}' requires is_snippet_only=False.")
+        if is_discovery_only:
+            raise ValueError(f"source_type '{source_type}' requires is_discovery_only=False.")
+        if extraction_status == "DISCOVERY_ONLY":
+            raise ValueError(f"source_type '{source_type}' cannot have extraction_status='DISCOVERY_ONLY'.")
+
+        # Non-discovery records must have a valid job_url and raw_title
+        if clean_job_url is None:
+            raise ValueError(f"job_url is required for non-discovery source '{source_type}' (cannot identify vacancy link).")
+        if clean_raw_title is None:
+            raise ValueError(f"raw_title is required for non-discovery source '{source_type}' (cannot identify vacancy title).")
+
+        # Essential fields for full extraction: raw_title, company_name, job_url, location_raw
+        has_all_essential = (clean_company_name is not None and clean_location_raw is not None)
+
+        if extraction_status is not None:
+            if extraction_status == "FULLY_EXTRACTED" and not has_all_essential:
+                missing_essential = []
+                if clean_company_name is None:
+                    missing_essential.append("company_name")
+                if clean_location_raw is None:
+                    missing_essential.append("location_raw")
+                raise ValueError(
+                    f"extraction_status cannot be 'FULLY_EXTRACTED' when essential field(s) {missing_essential} are missing."
+                )
+            if extraction_status == "PARTIALLY_EXTRACTED" and has_all_essential:
+                raise ValueError(
+                    "extraction_status cannot be 'PARTIALLY_EXTRACTED' when all essential fields are present."
+                )
+            resolved_status = extraction_status
+        else:
+            resolved_status = "FULLY_EXTRACTED" if has_all_essential else "PARTIALLY_EXTRACTED"
+
+    # 6. Compute missing_fields accurately (based strictly on tracked listing fields)
+    fields_map = {
+        "raw_title": clean_raw_title,
+        "company_name": clean_company_name,
+        "location_raw": clean_location_raw,
+        "experience_raw": clean_experience_raw,
+        "salary_raw": clean_salary_raw,
+        "posted_date": clean_posted_date,
+        "deadline_raw": clean_deadline_raw,
+        "job_url": clean_job_url,
+    }
+    missing_fields = [f for f in TRACKED_NULLABLE_FIELDS if fields_map.get(f) is None]
+
+    # Helper to check if a declared provenance field is populated
+    def is_field_populated(field_name: str) -> bool:
+        if field_name in TRACKED_NULLABLE_FIELDS:
+            return fields_map[field_name] is not None
+        elif field_name == "description_excerpt":
+            return bool(clean_desc)
+        elif field_name == "discovery_snippet":
+            return bool(clean_snippet)
+        return False
+
+    # 7. Strict Provenance Validation across ALL fields in VALID_PROVENANCE_FIELDS
+    if field_provenance is not None and not isinstance(field_provenance, dict):
+        raise TypeError(f"'field_provenance' must be a dictionary or None, got {type(field_provenance).__name__}.")
+
+    prov = dict(field_provenance or {})
+
+    # Reject unknown field names
+    for k in prov:
+        if k not in VALID_PROVENANCE_FIELDS:
+            raise ValueError(f"Unknown field in field_provenance: '{k}'. Must be one of: {sorted(VALID_PROVENANCE_FIELDS)}")
+
+    # Reject invalid provenance tags
+    for k, tag in prov.items():
+        if not isinstance(tag, str) or tag not in VALID_PROVENANCE_TAGS:
+            raise ValueError(f"Invalid provenance tag '{tag}' for field '{k}'. Must be one of: {sorted(VALID_PROVENANCE_TAGS)}")
+
+    # Enforce provenance rules across all declared fields
+    for f in VALID_PROVENANCE_FIELDS:
+        if is_field_populated(f):
+            if f not in prov:
+                raise ValueError(f"Missing provenance for populated field '{f}'.")
+            if prov[f] == "NOT_PROVIDED":
+                raise ValueError(f"Populated field '{f}' cannot have provenance 'NOT_PROVIDED'.")
+        else:
+            if f in prov and prov[f] != "NOT_PROVIDED":
+                raise ValueError(f"Field '{f}' is blank/missing but was given provenance '{prov[f]}' instead of 'NOT_PROVIDED'.")
+            prov[f] = "NOT_PROVIDED"
+
+    return {
+        "run_candidate_id": run_candidate_id.strip(),
+        "source_name": source_name.strip(),
+        "source_type": source_type,
+        "ingestion_tier": ingestion_tier,
+        "source_url": source_url.strip(),
+        "job_url": clean_job_url,
+        "raw_title": clean_raw_title,
+        "company_name": clean_company_name,
+        "location_raw": clean_location_raw,
+        "remote_type": remote_type,
+        "experience_raw": clean_experience_raw,
+        "employment_type": employment_type,
+        "salary_raw": clean_salary_raw,
+        "posted_date": clean_posted_date,
+        "deadline_raw": clean_deadline_raw,
+        "description_excerpt": clean_desc,
+        "discovery_snippet": clean_snippet,
+        "is_snippet_only": is_snippet_only,
+        "is_discovery_only": is_discovery_only,
+        "extraction_status": resolved_status,
+        "missing_fields": missing_fields,
+        "field_provenance": prov,
+    }
+
+
 def send_telegram_message(message_text):
     """Sends formatted message(s) to Telegram, splitting automatically if over Telegram's 4096-char limit.
     Returns True only if all chunks are successfully delivered and confirmed by Telegram API."""
