@@ -736,8 +736,12 @@ def filter_with_ai_and_notify():
         for item in combined_data:
             link = item.get("link")
             if link:
-                # Classify whether job was approved into digest or filtered out
-                if link in ai_text:
+                # Multi-attribute classification: checks direct URL or Title + Company match
+                title = item.get("title", "").strip().lower()
+                comp = item.get("company", "").strip().lower()
+                is_notified = (link in ai_text) or (bool(title and comp and title in ai_text.lower() and comp in ai_text.lower()))
+                
+                if is_notified:
                     seen_urls[link] = f"{now_iso}|notified"
                     notified_count += 1
                 else:

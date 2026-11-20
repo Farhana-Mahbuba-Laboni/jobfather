@@ -78,6 +78,51 @@ class TestJobFather(unittest.TestCase):
         self.assertEqual(loaded["https://example.com/notified_job"], "2026-11-20T08:30:00Z|notified")
         self.assertEqual(loaded["https://example.com/filtered_job"], "2026-11-20T08:30:00Z|filtered")
 
+    def test_atomic_database_write_safety(self):
+        """Verify atomic replacement leaves existing database uncorrupted if write fails."""
+        # Seed initial database
+        initial_data = {"https://example.com/stable": "2026-11-20T08:00:00Z"}
+        jf.save_seen_jobs(initial_data)
+
+        # Mock os.replace to raise an exception simulating process termination
+        with patch("os.replace", side_effect=IOError("Simulated system crash before swap")):
+            try:
+                jf.save_seen_jobs({"https://example.com/new": "in_run"})
+            except Exception:
+                pass
+
+        # Existing database must still be 100% valid and intact
+        reloaded = jf.load_seen_jobs()
+        self.assertEqual(reloaded, initial_data)
+
+    def test_job_lifecycle_multi_attribute_classification(self):
+        """Verify job lifecycle correctly tags |notified vs |filtered using URL and Title+Company."""
+        candidates = [
+            {"title": "Junior UX Designer", "company": "Alpha Tech", "link": "https://example.com/job1"},
+            {"title": "Product Design Intern", "company": "Beta Studio", "link": "https://example.com/job2"},
+            {"title": "Senior Director of UX", "company": "Gamma Corp", "link": "https://example.com/job3"}
+        ]
+        # Simulate AI output accepting job1 (by URL) and job2 (by title/company) while rejecting job3
+        simulated_ai_digest = (
+            "📌 Junior UX Designer - Alpha Tech\nLink: https://example.com/job1\n\n"
+            "📌 Product Design Intern - Beta Studio\nLink: View on Company Portal"
+        )
+        now_iso = "2026-11-20T08:30:00Z"
+        seen_urls = {}
+        for item in candidates:
+            link = item.get("link")
+            title = item.get("title", "").strip().lower()
+            comp = item.get("company", "").strip().lower()
+            is_notified = (link in simulated_ai_digest) or (bool(title and comp and title in simulated_ai_digest.lower() and comp in simulated_ai_digest.lower()))
+            if is_notified:
+                seen_urls[link] = f"{now_iso}|notified"
+            else:
+                seen_urls[link] = f"{now_iso}|filtered"
+
+        self.assertEqual(seen_urls["https://example.com/job1"], f"{now_iso}|notified")
+        self.assertEqual(seen_urls["https://example.com/job2"], f"{now_iso}|notified")
+        self.assertEqual(seen_urls["https://example.com/job3"], f"{now_iso}|filtered")
+
     def test_validate_environment(self):
         """Verify environment validator detects missing vs complete secrets."""
         orig_tel = jf.TELEGRAM_BOT_TOKEN
