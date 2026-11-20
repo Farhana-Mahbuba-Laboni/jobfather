@@ -54,7 +54,7 @@ class TestJobFather(unittest.TestCase):
     def test_save_seen_jobs_prunes_to_1000_and_normalizes_in_run(self):
         """Verify database prunes to newest 1000 entries and converts 'in_run' to ISO timestamps."""
         large_dict = {
-            f"https://example.com/job_{i}": f"2026-11-20T08:{i%60:02d}:00Z"
+            f"https://example.com/job_{i}": f"2026-11-01T08:{i%60:02d}:00Z"
             for i in range(1200)
         }
         large_dict["https://example.com/in_run_job"] = "in_run"
