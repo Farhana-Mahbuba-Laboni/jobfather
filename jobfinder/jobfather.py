@@ -746,7 +746,8 @@ def filter_with_ai_and_notify():
                 # Skip retrying if model is not found, unauthorized, or bad request
                 if "not found" in err_msg or "unauthorized" in err_msg or "invalid" in err_msg:
                     break
-                time.sleep(2)
+                # Exponential backoff: 2s on attempt 1, 4s on attempt 2
+                time.sleep(2 ** (attempt + 1))
         if response and response.text:
             break
 

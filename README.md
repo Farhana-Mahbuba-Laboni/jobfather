@@ -55,6 +55,14 @@ flowchart TD
 
 ---
 
+## 💡 Before & After: Raw Circular vs. JobFather Digest Card
+
+| ❌ Raw Unstructured Circular (Scraped from Web / Groups) | ✅ Normalized & Screened Card (Telegram Digest) |
+| :--- | :--- |
+| **Title:** *Urgently Hiring UI/UX Designer & Graphic Artist (Dhaka)*<br>**Snippet:** *"Need candidate with 4+ years Adobe Illustrator experience for daily Facebook banners, marketing flyers, and app screens. Competitive salary. Send CV to hr@example.com before Nov 30."*<br><br>*(Misleading title, asks for graphic flyers and 4+ years)* | 📌 **UI/UX Designer (Full-Time)** - Razib Marketing<br>• **🏢 Industry:** Digital Marketing & Software Solutions<br>• **🌐 Source:** LinkedIn<br>• **Type:** Full-time<br>• **📍 Location:** Dhaka, Bangladesh<br>• **💵 Compensation:** Competitive<br>• **Summary:** Designing responsive web and mobile app interfaces with clean layout hierarchy.<br>• **Deadline:** Nov 30, 2026<br>• **Link:** [View Job](https://linkedin.com/...) |
+
+---
+
 ## 🛡️ Production Engineering & Reliability Highlights
 
 * **Chronological ISO Deduplication:** Upgraded `seen_jobs.json` to an ordered `{url: timestamp}` ledger. Retains the newest 1,000 jobs sorted by discovery date so older jobs prune deterministically.
