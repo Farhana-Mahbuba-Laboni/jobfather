@@ -67,6 +67,17 @@ class TestJobFather(unittest.TestCase):
         self.assertNotEqual(loaded["https://example.com/in_run_job"], "in_run")
         self.assertIn("T", loaded["https://example.com/in_run_job"])
 
+    def test_save_seen_jobs_preserves_notified_and_filtered_states(self):
+        """Verify database cleanly preserves '|notified' and '|filtered' audit states."""
+        audit_dict = {
+            "https://example.com/notified_job": "2026-11-20T08:30:00Z|notified",
+            "https://example.com/filtered_job": "2026-11-20T08:30:00Z|filtered"
+        }
+        jf.save_seen_jobs(audit_dict)
+        loaded = jf.load_seen_jobs()
+        self.assertEqual(loaded["https://example.com/notified_job"], "2026-11-20T08:30:00Z|notified")
+        self.assertEqual(loaded["https://example.com/filtered_job"], "2026-11-20T08:30:00Z|filtered")
+
     # --- 2. TELEGRAM NOTIFICATION TESTS ---
     @patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""})
     def test_send_telegram_missing_credentials(self):

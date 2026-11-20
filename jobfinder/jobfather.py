@@ -706,11 +706,20 @@ def filter_with_ai_and_notify():
     if delivered:
         print("✅ Notification successfully delivered to Telegram!")
         now_iso = datetime.now(timezone.utc).isoformat()
+        notified_count = 0
+        filtered_count = 0
         for item in combined_data:
-            if "link" in item and item["link"]:
-                seen_urls[item["link"]] = now_iso
+            link = item.get("link")
+            if link:
+                # Classify whether job was approved into digest or filtered out
+                if link in ai_text:
+                    seen_urls[link] = f"{now_iso}|notified"
+                    notified_count += 1
+                else:
+                    seen_urls[link] = f"{now_iso}|filtered"
+                    filtered_count += 1
         save_seen_jobs(seen_urls)
-        print(f"💾 Saved {len(seen_urls)} total job links in chronological memory database.")
+        print(f"💾 Memory updated: {notified_count} accepted & notified, {filtered_count} filtered ({len(seen_urls)} total in chronological ledger).")
     else:
         print("⚠️ Telegram delivery failed or was incomplete. Seen memory preserved so jobs can be redelivered on next run.")
 
