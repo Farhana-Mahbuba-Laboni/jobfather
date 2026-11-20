@@ -40,18 +40,21 @@ def load_seen_jobs():
 def save_seen_jobs(seen_dict):
     """Prunes database to the most recent 1000 items while strictly preserving chronological order."""
     try:
-        # Sort chronologically by timestamp and retain latest 1000 jobs
-        sorted_items = sorted(seen_dict.items(), key=lambda x: str(x[1]))[-1000:]
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # Ensure any temporary marker gets a valid ISO timestamp
+        normalized = {k: (v if v != "in_run" and isinstance(v, str) else now_iso) for k, v in seen_dict.items()}
+        sorted_items = sorted(normalized.items(), key=lambda x: str(x[1]))[-1000:]
         with open(DB_FILE, "w") as f:
             json.dump(dict(sorted_items), f, indent=2)
     except Exception as e:
         print(f"Notice saving seen database: {e}")
 
 def send_telegram_message(message_text):
-    """Sends formatted message(s) to Telegram, splitting automatically if over Telegram's 4096-char limit."""
+    """Sends formatted message(s) to Telegram, splitting automatically if over Telegram's 4096-char limit.
+    Returns True only if all chunks are successfully delivered."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ CRITICAL: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing from environment/secrets!")
-        return
+        return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
@@ -69,6 +72,7 @@ def send_telegram_message(message_text):
         if current_chunk:
             chunks.append(current_chunk)
 
+    all_delivered = True
     for i, chunk in enumerate(chunks):
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
@@ -76,19 +80,29 @@ def send_telegram_message(message_text):
             "parse_mode": "Markdown",
             "disable_web_page_preview": False
         }
+        chunk_success = False
         try:
             res = requests.post(url, json=payload, timeout=15)
             print(f"📡 Telegram chunk {i+1}/{len(chunks)} status: {res.status_code}")
-            if res.status_code != 200:
+            if res.status_code == 200:
+                chunk_success = True
+            else:
                 print(f"⚠️ Telegram markdown rejected: {res.text}. Retrying with plain text...")
                 payload.pop("parse_mode", None)
                 res2 = requests.post(url, json=payload, timeout=15)
                 print(f"📡 Telegram plain-text retry status: {res2.status_code}")
-                if res2.status_code != 200:
+                if res2.status_code == 200:
+                    chunk_success = True
+                else:
                     print(f"❌ Telegram retry failed: {res2.text}")
             time.sleep(1.5)  # Prevent Telegram 429 rate limit between chunks
         except Exception as e:
             print(f"❌ Error sending message to Telegram: {e}")
+        
+        if not chunk_success:
+            all_delivered = False
+
+    return all_delivered
 
 # --- 1. LINKEDIN DIRECT SCRAPER ---
 def fetch_linkedin_jobs(session, seen_urls):
@@ -113,7 +127,8 @@ def fetch_linkedin_jobs(session, seen_urls):
                     link = item.find("a", class_="base-card__full-link")
                     if title and link:
                         clean_url = link.get("href").split("?")[0]
-                        if clean_url not in seen_urls:
+                        if clean_url and clean_url not in seen_urls:
+                            seen_urls[clean_url] = "in_run"
                             new_jobs.append({
                                 "source": "LinkedIn",
                                 "title": title.text.strip(),
@@ -141,6 +156,7 @@ def fetch_remotive_jobs(session, seen_urls):
                 apply_url = item.get("url", "")
                 location = item.get("candidate_required_location", "Worldwide")
                 if apply_url and apply_url not in seen_urls:
+                    seen_urls[apply_url] = "in_run"
                     jobs.append({
                         "source": "Remotive",
                         "title": title,
@@ -166,6 +182,7 @@ def fetch_wwr_rss(session, seen_urls):
                 link = item.find("link").text if item.find("link") is not None else ""
                 desc = item.find("description").text if item.find("description") is not None else ""
                 if link and link not in seen_urls:
+                    seen_urls[link] = "in_run"
                     jobs.append({
                         "source": "We Work Remotely (WWR)",
                         "title": title,
@@ -192,6 +209,7 @@ def fetch_remoteok_jobs(session, seen_urls):
                 company = item.get("company", "Remote Startup")
                 apply_url = item.get("url", "")
                 if apply_url and apply_url not in seen_urls:
+                    seen_urls[apply_url] = "in_run"
                     jobs.append({
                         "source": "RemoteOK",
                         "title": pos,
@@ -227,7 +245,8 @@ def fetch_bd_and_remote_portals(session, seen_urls):
                     deadline = item.get("deadline", "Not specified")
                     if job_id:
                         clean_link = f"https://bdjobs.com/h/details/{job_id}"
-                        if clean_link not in seen_urls:
+                        if clean_link and clean_link not in seen_urls:
+                            seen_urls[clean_link] = "in_run"
                             jobs.append({
                                 "source": "Bdjobs",
                                 "title": title,
@@ -249,7 +268,8 @@ def fetch_bd_and_remote_portals(session, seen_urls):
                 href = a_tag.get("href", "")
                 if href and title and len(title) > 3:
                     clean_link = f"https://uiuxjobsboard.com{href}" if not href.startswith("http") else href
-                    if clean_link not in seen_urls:
+                    if clean_link and clean_link not in seen_urls:
+                        seen_urls[clean_link] = "in_run"
                         jobs.append({
                             "source": "UI/UX Jobs Board",
                             "title": title,
@@ -280,6 +300,7 @@ def fetch_bd_and_remote_portals(session, seen_urls):
                     if snippet and link_tag:
                         clean_link = link_tag.get("href", "").strip()
                         if clean_link and clean_link not in seen_urls:
+                            seen_urls[clean_link] = "in_run"
                             src_name = "Job Portal"
                             comp_name = "Hiring Company"
                             if "bdjobs.com" in clean_link:
@@ -312,7 +333,7 @@ def fetch_facebook_via_apify(session, seen_urls):
     
     # 1. Apify Cloud Scraper with extended 24-hour depth
     try:
-        url = f"https://api.apify.com/v2/acts/apify~facebook-groups-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}&timeout=70"
+        url = "https://api.apify.com/v2/acts/apify~facebook-groups-scraper/run-sync-get-dataset-items?timeout=70"
         payload = {
             "startUrls": [
                 {"url": "https://www.facebook.com/groups/uxbangladesh/"},
@@ -324,7 +345,10 @@ def fetch_facebook_via_apify(session, seen_urls):
             "maxPosts": 15,
             "maxComments": 0
         }
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {APIFY_TOKEN}"
+        }
         res = requests.post(url, json=payload, headers=headers, timeout=75)
         if res.status_code in [200, 201]:
             items = res.json()
@@ -333,6 +357,7 @@ def fetch_facebook_via_apify(session, seen_urls):
                     txt = item.get("text") or item.get("postText") or item.get("message") or ""
                     post_link = item.get("url") or item.get("postUrl") or "https://facebook.com/groups/uxbangladesh/"
                     if txt and post_link not in seen_urls:
+                        seen_urls[post_link] = "in_run"
                         posts.append({
                             "source": "Facebook Group Post (Apify)",
                             "title": txt.replace("\n", " | ")[:150],
@@ -361,6 +386,7 @@ def fetch_facebook_via_apify(session, seen_urls):
                         if snippet and link_tag:
                             clean_link = link_tag.get("href", "").strip()
                             if clean_link and clean_link not in seen_urls:
+                                seen_urls[clean_link] = "in_run"
                                 posts.append({
                                     "source": "Facebook Community Lead",
                                     "title": snippet.text.strip()[:140],
@@ -388,6 +414,7 @@ def fetch_wellfound_jobs(session, seen_urls):
                 company = item.get("companyName", "Tech Startup")
                 link = item.get("applicationLink") or item.get("url") or ""
                 if link and link not in seen_urls:
+                    seen_urls[link] = "in_run"
                     jobs.append({
                         "source": "Himalayas Startup",
                         "title": title,
@@ -411,6 +438,7 @@ def fetch_wellfound_jobs(session, seen_urls):
                 if snippet and link_tag:
                     clean_link = link_tag.get("href", "").strip()
                     if clean_link and clean_link not in seen_urls:
+                        seen_urls[clean_link] = "in_run"
                         jobs.append({
                             "source": "Wellfound (AngelList)",
                             "title": snippet.text.strip()[:140],
@@ -452,7 +480,8 @@ def fetch_complete_bd_companies(session, seen_urls):
                     link = item.find("a", class_="base-card__full-link")
                     if title and link:
                         clean_url = link.get("href").split("?")[0]
-                        if clean_url not in seen_urls:
+                        if clean_url and clean_url not in seen_urls:
+                            seen_urls[clean_url] = "in_run"
                             jobs.append({
                                 "source": f"BD Tech Giant ({comp})",
                                 "title": title.text.strip(),
@@ -488,6 +517,7 @@ def fetch_complete_bd_companies(session, seen_urls):
                     if snippet and link_tag:
                         clean_link = link_tag.get("href", "").strip()
                         if clean_link and clean_link not in seen_urls:
+                            seen_urls[clean_link] = "in_run"
                             jobs.append({
                                 "source": "BD Tech / Enterprise / Startup",
                                 "title": snippet.text.strip()[:140],
@@ -590,6 +620,10 @@ def filter_with_ai_and_notify():
     5. ACCURATE BUSINESS INDUSTRY CLASSIFICATION:
        - Identify the hiring company's actual business domain (e.g. FinTech, Telecom & Super-Apps, Enterprise SaaS, HealthTech, EdTech, E-Commerce & Logistics, Software Exporter / Offshore IT, AI & Autonomous Tech, Digital Product Studio / Agency).
        - CRUCIAL: NEVER use the job portal or scraping medium (like Bdjobs, LinkedIn, Careerjet, RemoteRocketship, UI/UX Jobs Board, JobTogether, or Facebook) as the Industry! The job board is just the medium and belongs under '🌐 Source'.
+    6. GROUNDING & ANTI-HALLUCINATION:
+       - NEVER invent or fabricate job titles, company names, links, or compensation details.
+       - You MUST ONLY format and output jobs that are actually present in the <untrusted_scraped_circulars> data above.
+       - If a circular lacks compensation or deadline, write 'Not specified' or 'Not mentioned'—never guess.
 
     Format each job strictly as:
     📌 *[Job Title]* - [Company Name]
@@ -634,15 +668,18 @@ def filter_with_ai_and_notify():
 
     ai_text = response.text.strip()
     final_message = f"🎯 *JobFather Daily UX Digest:*\n\n{ai_text}"
-    send_telegram_message(final_message)
-    print("✅ Notification sent to Telegram with categorized job leads!")
+    delivered = send_telegram_message(final_message)
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-    for item in combined_data:
-        if "link" in item and item["link"]:
-            seen_urls[item["link"]] = now_iso
-    save_seen_jobs(seen_urls)
-    print(f"💾 Saved {len(seen_urls)} total job links in chronological memory database.")
+    if delivered:
+        print("✅ Notification successfully delivered to Telegram!")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for item in combined_data:
+            if "link" in item and item["link"]:
+                seen_urls[item["link"]] = now_iso
+        save_seen_jobs(seen_urls)
+        print(f"💾 Saved {len(seen_urls)} total job links in chronological memory database.")
+    else:
+        print("⚠️ Telegram delivery failed or was incomplete. Seen memory preserved so jobs can be redelivered on next run.")
 
 if __name__ == "__main__":
     filter_with_ai_and_notify()
