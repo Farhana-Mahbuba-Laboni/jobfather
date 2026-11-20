@@ -1,6 +1,6 @@
-# JobFather Data Extraction Reliability Audit & Implementation Plan (v1.2 - Step 3.2 Final)
+# JobFather Data Extraction Reliability Audit & Implementation Plan (v1.3 - Step 3.3 Final)
 
-**Document Status:** REVISED FINAL DRAFT FOR APPROVAL (Step 3.2)  
+**Document Status:** REVISED FINAL DRAFT FOR APPROVAL (Step 3.3)  
 **Governing Authority:** `CANDIDATE_PROFILE_SPEC.md` (Approved v1.1)  
 **Core Objective:** Establish reliable extraction across all 13 ingestion sub-pipelines, decouple search snippet origin from general discovery-only status, define strict `source_url` vs. `job_url` handling (allowing `job_url = None` for discovery leads), standardize scraper health reporting including `FAILED_EXCEPTION`, and establish a normalized extraction contract.
 
@@ -55,17 +55,20 @@ engine result snippet?    parsed yet?              (e.g. ['job_url'])        eva
 ### Precise Definitions & Interrelationships:
 
 1. **`is_snippet_only` (Boolean - Search Snippet Origin Flag):**
-   * `True`: The candidate record originates **strictly from a search engine result snippet** (e.g. DuckDuckGo result) where the actual listing page has not been fetched or parsed.
-   * `False`: The candidate record originates from a structured API, an RSS feed, a direct job page scrape, or a social media community post.
-   * *Critical Rule:* A social media community post (such as a Facebook group post) has `is_snippet_only = False`. Facebook posts are not search engine result snippets.
+   * `True`: The candidate record originates **strictly from a search engine result snippet** (the 4 DuckDuckGo fallbacks: SRC-05c, SRC-06b, SRC-07b, SRC-08b) where the actual listing page has not been fetched or parsed.
+   * `False`: The candidate record originates from a structured API, an RSS feed, a direct job page scrape, or an Apify social media community post.
+   * *Critical Rule:* An Apify social media community post (`SRC-06a`) has `is_snippet_only = False`. Facebook posts are direct community posts, not search engine result snippets. Conversely, the DuckDuckGo Facebook fallback (`SRC-06b`) has `is_snippet_only = True` because it is a search engine result snippet.
 
 2. **`is_discovery_only` (Boolean - Unparsed Lead Flag):**
-   * `True`: The candidate record represents an **unparsed discovery clue or lead** where the actual vacancy listing page has not been fetched or parsed (e.g. DuckDuckGo search snippets, Facebook community posts).
-   * `False`: The candidate record originates from a structured API, RSS feed, or direct job page scrape where the listing content was parsed.
+   * `True`: The candidate record represents an **unparsed discovery clue or lead** where the actual vacancy listing page has not been fetched or parsed (e.g. all 4 DuckDuckGo search snippets, Apify Facebook community posts).
+   * `False`: The candidate record originates from a structured API, RSS feed, or direct job page scrape where structured vacancy listing metadata was parsed.
+   * *Clarification on Direct Job Cards (SRC-01, SRC-05b, SRC-08a):*
+     * A direct job card (such as a LinkedIn search result card or UI/UX Jobs Board card) **counts as parsed listing content** (`is_discovery_only = False`) because it is a verified, portal-rendered vacancy entity with explicit DOM selectors extracting the title, company, and canonical vacancy link.
+     * **Important Limitation:** A job card provides list-level metadata (title, company, URL) and does **not** contain a full job description or detailed requirements. Therefore, `description_excerpt` remains empty or brief (`""`), and if key fields like `company_name` are missing from the card, the record is flagged as `extraction_status = "PARTIALLY_EXTRACTED"` (never `"DISCOVERY_ONLY"`).
    * *Matrix of Origins:*
-     * **DuckDuckGo Search Snippet:** `is_snippet_only = True`, `is_discovery_only = True`, `extraction_status = "DISCOVERY_ONLY"`.
-     * **Facebook Community Post:** `is_snippet_only = False`, `is_discovery_only = True`, `extraction_status = "DISCOVERY_ONLY"`.
-     * **Direct Job Card / Structured API:** `is_snippet_only = False`, `is_discovery_only = False`, `extraction_status = "FULLY_EXTRACTED"` or `"PARTIALLY_EXTRACTED"`.
+     * **Direct Job Cards & Structured APIs/Feeds (SRC-01, 02, 03, 04, 05a, 05b, 07a, 08a):** `is_snippet_only = False`, `is_discovery_only = False`, `extraction_status = "FULLY_EXTRACTED"` or `"PARTIALLY_EXTRACTED"`.
+     * **DuckDuckGo Search Snippets (SRC-05c, SRC-06b, SRC-07b, SRC-08b):** `is_snippet_only = True`, `is_discovery_only = True`, `extraction_status = "DISCOVERY_ONLY"`.
+     * **Facebook Community Posts via Apify (SRC-06a):** `is_snippet_only = False`, `is_discovery_only = True`, `extraction_status = "DISCOVERY_ONLY"`.
 
 3. **`missing_fields` (List of Strings - Audit Trail):**
    * Enumerates every individual attribute that could not be resolved from the source payload and evaluated to `None`.
@@ -74,7 +77,7 @@ engine result snippet?    parsed yet?              (e.g. ['job_url'])        eva
 4. **`extraction_status` (Enum - Completeness State):**
    * `FULLY_EXTRACTED`: Essential fields (`raw_title`, `company_name`, `job_url`) are present and verified directly from the listing/API. Missing optional metadata (such as salary or deadline) does **not** downgrade a record from `FULLY_EXTRACTED`.
    * `PARTIALLY_EXTRACTED`: Originates from a direct job card or API, but an essential field (e.g. `company_name` or `location_raw`) could not be parsed.
-   * `DISCOVERY_ONLY`: Originates from an unparsed discovery lead (`is_discovery_only = True`), such as a search engine snippet or a social media community post.
+   * `DISCOVERY_ONLY`: Originates from an unparsed discovery lead (`is_discovery_only = True`), such as any search engine snippet or an Apify community post.
 
 ---
 
@@ -128,7 +131,7 @@ normalized_record = {
     * **The discovery lead is NOT discarded.** It is preserved with its `source_url` and routed downstream to `NEEDS_REVIEW`.
   * Under no circumstances may `source_url` (such as a Facebook post permalink) be falsely asserted as a verified `job_url`.
 * **`description_excerpt` vs `discovery_snippet`:**
-  * `description_excerpt`: Text extracted from an actual parsed job description or API body.
+  * `description_excerpt`: Text extracted from an actual parsed job description or API body. Direct job cards that lack a body text set `description_excerpt = ""`.
   * `discovery_snippet`: Search engine snippet text or raw social media post text.
 * **`raw_title` and `company_name`:** If unverified or missing from the listing, set to `None`. Artificial placeholders (`"Hiring Company"`, `"Seed/Series-A Startup"`) are strictly prohibited.
 * **`run_candidate_id`:** Ephemeral identifier (`run_001`, `run_002`) used to coordinate LLM input/output within a single execution. It is never treated as a persistent vacancy identifier.
@@ -144,8 +147,8 @@ Ingestion tiers describe the **transport mechanism**, not a blanket guarantee of
 | **Tier 1** | **Structured API** | Remotive, Bdjobs API, RemoteOK, Himalayas | High title, company, and URL stability. | Does not guarantee that the vacancy is currently active or that experience requirements are present in the list endpoint. |
 | **Tier 2** | **Structured Feed** | We Work Remotely (WWR RSS) | Clean title and description. | Company name requires parsing from title string (`Company: Title`). |
 | **Tier 3** | **Direct Page Scrape** | LinkedIn Guest API, UI/UX Jobs Board, BD Tech Giants | Real title and company card elements. | Experience, salary, and full description are typically absent from list cards. |
-| **Tier 4** | **Social Community Scraper** | Facebook Groups via Apify Actor | Real community post text and author/post URL. | Cannot guarantee post is a job vacancy (may be question/discussion); often lacks external `job_url`. |
-| **Tier 5** | **Search Discovery Result** | DuckDuckGo fallbacks (Portals, Facebook, Wellfound, BD Tech) | Preserves candidate destination URL. | **Cannot establish title or company.** Snippets are search fragments, not structured listings. |
+| **Tier 4** | **Social Community Scraper** | Facebook Groups via Apify Actor (SRC-06a) | Real community post text and author/post URL. | Cannot guarantee post is a job vacancy (may be question/discussion); often lacks external `job_url`. |
+| **Tier 5** | **Search Discovery Result** | DuckDuckGo fallbacks (SRC-05c, SRC-06b, SRC-07b, SRC-08b) | Preserves candidate destination URL. | **Cannot establish title or company.** Snippets are search fragments, not structured listings. |
 
 ### Field-Level Provenance Mapping:
 Every extracted field records its exact extraction origin in `field_provenance`:
@@ -161,17 +164,17 @@ Every extracted field records its exact extraction origin in `field_provenance`:
 
 ## 5. Strategy for Eliminating Search Snippet & Social Post Pollution
 
-### A. Search Engine Results (The 4 DuckDuckGo Fallbacks)
-For pipelines SRC-05c, SRC-06b, SRC-07b, and SRC-08b:
+### A. Search Engine Results (The 4 DuckDuckGo Fallbacks: SRC-05c, SRC-06b, SRC-07b, SRC-08b)
+All four search engine fallbacks—including the Facebook DuckDuckGo fallback (`SRC-06b`)—adhere to uniform search result rules:
 1. `raw_title` **must be set to `None`**. Snippet text must never be assigned to `title`.
-2. `company_name` **must be set to `None`**. Placeholders like `"Hiring Company"` are deleted.
+2. `company_name` **must be set to `None`**. Placeholders like `"Hiring Company"` or `"Facebook Design Community"` are deleted.
 3. `discovery_snippet` receives the search result text. `description_excerpt` is set to `""`.
 4. Quality flags: `is_snippet_only = True`, `is_discovery_only = True`.
 5. Status: `extraction_status = "DISCOVERY_ONLY"`.
 6. Missing fields: `missing_fields` records `["raw_title", "company_name"]` (and `"job_url"` if the external link could not be parsed).
 
-### B. Facebook Community Posts (Apify SRC-06a & DDG SRC-06b)
-Facebook group posts are community interactions, not structured job boards.
+### B. Facebook Community Posts via Apify (SRC-06a Only)
+Facebook group posts retrieved directly from the Apify Actor are community interactions, not search snippets or structured job boards.
 1. **Raw Post Storage:** The complete post text is stored in `discovery_snippet`.
 2. **Explicit Title Resolution:** Set `raw_title = None` by default unless an unambiguous standalone job header is present (e.g. lines starting with `Job Title:` or `Position:`).
 3. **Company Name Resolution:** Set `company_name = None`. Group names (e.g. *"UX Bangladesh"*) must **never** be assigned as the hiring company.
@@ -181,7 +184,7 @@ Facebook group posts are community interactions, not structured job boards.
    * If `job_url is None`, `"job_url"` is appended to `missing_fields`. **The post is NOT discarded.**
 5. **Quality Flags:**
    * `source_type = "COMMUNITY_POST"`.
-   * `is_snippet_only = False` (Facebook posts are community posts, NOT search engine snippets).
+   * `is_snippet_only = False` (Facebook posts from Apify are direct community posts, NOT search engine snippets).
    * `is_discovery_only = True` (The actual vacancy listing has not been parsed).
    * `extraction_status = "DISCOVERY_ONLY"`.
 6. **Downstream Routing:** In compliance with `CANDIDATE_PROFILE_SPEC.md` Rule #11, all `DISCOVERY_ONLY` leads are routed to `NEEDS_REVIEW` (persisted in `needs_review.json`). They are never presented as verified Core Matches in the primary Telegram digest.
@@ -245,8 +248,8 @@ pipeline_status = {
 * **Improvement:** Preserve `company_name` as clean string. Populate `location_raw = item.get("candidate_required_location")`. Extract `posted_date` and `salary_raw` if present in JSON. Set `is_snippet_only = False` and `is_discovery_only = False`.
 
 ### 4. DuckDuckGo Fallbacks (SRC-05c, SRC-06b, SRC-07b, SRC-08b)
-* **Current Code:** `jobs.append({"title": snippet.text[:140], "company": "Hiring Company", ...})`
-* **Improvement:** Set `raw_title = None`, `company_name = None`, `discovery_snippet = snippet.text[:300]`, `is_snippet_only = True`, `is_discovery_only = True`, `extraction_status = "DISCOVERY_ONLY"`.
+* **Current Code:** `jobs.append({"title": snippet.text[:140], "company": "Hiring Company" / "Facebook Design Community", ...})`
+* **Improvement:** All four DDG fallbacks (including `SRC-06b`) set `raw_title = None`, `company_name = None`, `discovery_snippet = snippet.text[:300]`, `is_snippet_only = True`, `is_discovery_only = True`, `extraction_status = "DISCOVERY_ONLY"`.
 
 ### 5. Facebook Groups via Apify (SRC-06a)
 * **Current Code:** Assigns `title = postText[:150]` and `company = groupTitle`.
@@ -260,16 +263,16 @@ These 10 unit tests will be implemented in `tests/test_extraction.py` using stat
 
 | Test ID | Scenario | Mock Input Fixture | Assertions & Expected Output Contract |
 | :--- | :--- | :--- | :--- |
-| **TEST-EXT-01** | **WWR Title & Company Split** | RSS XML item with `<title>Canva: Junior Product Designer</title>` | `company_name == "Canva"`, `raw_title == "Junior Product Designer"`, `is_snippet_only == False`, `is_discovery_only == False`, `extraction_status == "FULLY_EXTRACTED"`. |
-| **TEST-EXT-02** | **LinkedIn Missing Company** | LinkedIn HTML card with valid `<h3>` title but missing `<h4>` subtitle | `raw_title == "UI/UX Designer"`, `company_name == None`, `is_snippet_only == False`, `is_discovery_only == False`, `"company_name" in missing_fields`, `extraction_status == "PARTIALLY_EXTRACTED"`. |
-| **TEST-EXT-03** | **LinkedIn Missing Title** | LinkedIn HTML card with valid `<h4>` company but empty/missing `<h3>` title | Record is rejected as invalid (cannot identify vacancy). `len(jobs) == 0`. |
-| **TEST-EXT-04** | **DuckDuckGo Search Snippet** | HTML result body with snippet text and target URL | `raw_title == None`, `company_name == None`, `is_snippet_only == True`, `is_discovery_only == True`, `extraction_status == "DISCOVERY_ONLY"`, `discovery_snippet` contains text. |
-| **TEST-EXT-05** | **Facebook Post (No External Job URL)** | Apify post: *"We are looking for a Junior UI Designer. Send CV to our page inbox."* with post URL | `raw_title == None`, `company_name == None`, `job_url == None`, `source_url == postUrl`, `is_snippet_only == False`, `is_discovery_only == True`, `extraction_status == "DISCOVERY_ONLY"`, `"job_url" in missing_fields`. Record is preserved (not dropped). |
-| **TEST-EXT-06** | **Facebook Post (With External Link)** | Apify post containing hiring text and an external application URL | `raw_title == None`, `company_name == None`, `is_snippet_only == False`, `is_discovery_only == True`, `source_url == postUrl`, `job_url == "https://careers.example.com"`, text in `discovery_snippet`. |
+| **TEST-EXT-01** | **WWR Title & Company Split (SRC-03)** | RSS XML item with `<title>Canva: Junior Product Designer</title>` | `company_name == "Canva"`, `raw_title == "Junior Product Designer"`, `is_snippet_only == False`, `is_discovery_only == False`, `extraction_status == "FULLY_EXTRACTED"`. |
+| **TEST-EXT-02** | **LinkedIn Missing Company (SRC-01)** | LinkedIn HTML card with valid `<h3>` title but missing `<h4>` subtitle | `raw_title == "UI/UX Designer"`, `company_name == None`, `is_snippet_only == False`, `is_discovery_only == False`, `"company_name" in missing_fields`, `extraction_status == "PARTIALLY_EXTRACTED"`. |
+| **TEST-EXT-03** | **LinkedIn Missing Title (SRC-01)** | LinkedIn HTML card with valid `<h4>` company but empty/missing `<h3>` title | Record is rejected as invalid (cannot identify vacancy). `len(jobs) == 0`. |
+| **TEST-EXT-04** | **DuckDuckGo Search Snippet (SRC-05c / SRC-07b)** | HTML result body with snippet text and target URL | `raw_title == None`, `company_name == None`, `is_snippet_only == True`, `is_discovery_only == True`, `extraction_status == "DISCOVERY_ONLY"`, `discovery_snippet` contains text. |
+| **TEST-EXT-05** | **Facebook Apify Community Post (SRC-06a - No External Link)** | Apify post: *"We are looking for a Junior UI Designer. Send CV to our page inbox."* with post URL | `raw_title == None`, `company_name == None`, `job_url == None`, `source_url == postUrl`, `is_snippet_only == False`, `is_discovery_only == True`, `extraction_status == "DISCOVERY_ONLY"`, `"job_url" in missing_fields`. Record is preserved (not dropped). |
+| **TEST-EXT-06** | **Facebook Apify Post (SRC-06a - With External Link)** | Apify post containing hiring text and an external application URL | `raw_title == None`, `company_name == None`, `is_snippet_only == False`, `is_discovery_only == True`, `source_url == postUrl`, `job_url == "https://careers.example.com"`, text in `discovery_snippet`. |
 | **TEST-EXT-07** | **Scraper HTTP 429 Error** | Mock requests.Session returning HTTP 429 | Returns `([], status)`. `status["status"] == "FAILED_HTTP_ERROR"`, `status["http_code"] == 429`. |
 | **TEST-EXT-08** | **HTTP 200 Bot Challenge** | Mock HTTP 200 returning Cloudflare challenge HTML | Returns `([], status)`. `status["status"] == "FAILED_PARSE_ERROR"` (does not report `EMPTY_SUCCESS`). |
 | **TEST-EXT-09** | **Missing Optional Fields** | Remotive API response with valid title, company, URL, but missing salary and deadline | `extraction_status == "FULLY_EXTRACTED"`, `salary_raw == None`, `deadline_raw == None`, missing optional fields do **not** downgrade status. |
-| **TEST-EXT-10** | **Source URL vs. Job URL** | DuckDuckGo search result linking to external job URL | `source_url` starts with `https://html.duckduckgo.com`, `job_url` contains destination URL, `is_snippet_only == True`, `is_discovery_only == True`. |
+| **TEST-EXT-10** | **DuckDuckGo Facebook Fallback (SRC-06b - Search vs Post)** | DuckDuckGo search result linking to a Facebook group post URL | `source_url` starts with `https://html.duckduckgo.com`, `job_url` contains destination Facebook URL, `is_snippet_only == True`, `is_discovery_only == True`, `extraction_status == "DISCOVERY_ONLY"`. |
 
 ---
 
@@ -279,7 +282,7 @@ Implementation will be executed in four disciplined, test-verified phases:
 
 * **Phase 3A — Extraction Contract Builder:** Implement `build_normalized_record()` helper with strict field typing and validation.
 * **Phase 3B — Structured API & RSS Feed Refinement:** Refactor Remotive, RemoteOK, Bdjobs, and WWR RSS parser to extract real company names and field provenance.
-* **Phase 3C — Snippet & Social Sanitization:** Refactor the 4 DuckDuckGo fallbacks and Apify scraper to eliminate title pollution, handle `job_url = None` for community leads, and set accurate `is_snippet_only` and `is_discovery_only` flags.
+* **Phase 3C — Snippet & Social Sanitization:** Refactor the 4 DuckDuckGo fallbacks (including `SRC-06b`) and Apify scraper (`SRC-06a`) to eliminate title pollution, handle `job_url = None` for community leads, and set accurate `is_snippet_only` and `is_discovery_only` flags.
 * **Phase 3D — Extraction Test Suite:** Implement `tests/test_extraction.py` with all 10 mocked test fixtures and verify 100% pass rate.
 
 ---
@@ -290,4 +293,4 @@ Implementation will be executed in four disciplined, test-verified phases:
 * **Authority preserved:** `CANDIDATE_PROFILE_SPEC.md` remains the sole governing authority for classification decisions.
 
 ---
-*End of Refined Extraction Reliability Plan (v1.2 - Step 3.2 Final).*
+*End of Refined Extraction Reliability Plan (v1.3 - Step 3.3 Final).*
