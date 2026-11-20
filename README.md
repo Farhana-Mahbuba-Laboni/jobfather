@@ -62,13 +62,21 @@ flowchart TD
 * **Pipeline Telemetry:** Live per-scraper health checks and discovery statistics automatically rendered to GitHub Actions Step Summary (`$GITHUB_STEP_SUMMARY`).
 * **Pinned Dependencies:** Strict version locking in `requirements.txt` for deterministic, zero-surprise cloud runner builds.
 * **Telegram Auto-Chunking:** Automatically chunks messages exceeding 3,900 characters to prevent silent truncation under Telegram's 4,096-char ceiling.
-* **AI Model Fallback Chain:** Automatically cycles through verified production models (`gemini-2.5-flash`, `gemini-2.0-flash`, `gemini-1.5-flash`) with error-aware retry backoff if Google API experiences high traffic.
+* **AI Model Fallback Chain:** Automatically cycles through verified production models (`gemini-2.5-flash`, `gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-2.0-flash`, `gemini-1.5-flash`) with error-aware retry backoff if Google API experiences high traffic.
+
+---
+
+## ⚠️ Known Limitations & Design Trade-offs
+
+* **HTML Scraper Maintenance:** Direct web scrapers (such as LinkedIn guest API and Bdjobs) depend on public HTML structures. Upstream DOM changes may require selector updates.
+* **Search Snippet Fallbacks:** For portals without direct open APIs, web query snippets are evaluated as initial leads rather than full-page descriptions.
+* **Third-Party API Quotas:** Google Gemini and Apify operate on free-tier limits. JobFather includes exponential backoff, stealth fallbacks, and memory protection when limits are reached.
 
 ---
 
 ## 🔮 Engineering Roadmap
 
-- [x] Automated test suite verifying memory persistence, Telegram chunking, and deduplication
+- [x] Automated test suite verifying memory persistence, Telegram chunking, and card-level deduplication
 - [ ] SQLite persistence layer for multi-profile candidate indexing
 - [ ] Webhook-based interactive Telegram buttons (e.g. `[Save Job]`, `[Apply Now]`)
 
@@ -130,6 +138,9 @@ Open `jobfinder/jobfather.py` and modify the prompt inside `filter_with_ai_and_n
 │   ├── requirements.txt       # Python dependencies
 │   ├── seen_jobs.json         # Deduplication memory ledger
 │   └── .env.example           # Environment variable template
+├── tests/
+│   ├── __init__.py            # Test package marker
+│   └── test_jobfather.py      # Automated unit tests for DB, Telegram & matching
 └── README.md                  # Project documentation
 ```
 
