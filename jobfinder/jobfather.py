@@ -54,6 +54,7 @@ def save_seen_jobs(seen_dict):
             tmp_path = tf.name
 
         os.replace(tmp_path, DB_FILE)
+        return True
     except Exception as e:
         print(f"Notice saving seen database: {e}")
         if tmp_path and os.path.exists(tmp_path):
@@ -61,6 +62,7 @@ def save_seen_jobs(seen_dict):
                 os.remove(tmp_path)
             except Exception:
                 pass
+        return False
 
 def classify_job(item, digest_text):
     """Accurately classifies whether a candidate job was included in the notified digest.
